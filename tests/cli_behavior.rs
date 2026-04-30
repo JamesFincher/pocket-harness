@@ -36,6 +36,8 @@ fn cli_init_check_and_run_work_against_temp_home() {
     let run = pocket_harness(&config_path, &home, &["run", "--thread", "main", "hello"]);
     assert!(run.status.success(), "stderr={}", stderr(&run));
     assert!(stdout(&run).contains("prompt=hello"));
+
+    assert!(temp.path().join("providers.yaml").exists());
 }
 
 #[test]
@@ -80,4 +82,25 @@ fn cli_init_refuses_to_overwrite_without_force() {
 
     assert!(!second.status.success());
     assert!(stderr(&second).contains("config already exists"));
+}
+
+#[test]
+fn cli_lists_providers_and_models_from_catalog() {
+    let temp = tempfile::tempdir().unwrap();
+    let home = temp.path().join("home");
+    let config_path = temp.path().join("pocket-harness.yaml");
+
+    assert!(
+        pocket_harness(&config_path, &home, &["init"])
+            .status
+            .success()
+    );
+
+    let providers = pocket_harness(&config_path, &home, &["providers"]);
+    assert!(providers.status.success(), "stderr={}", stderr(&providers));
+    assert!(stdout(&providers).contains("openai - OpenAI"));
+
+    let models = pocket_harness(&config_path, &home, &["models", "openai"]);
+    assert!(models.status.success(), "stderr={}", stderr(&models));
+    assert!(stdout(&models).contains("gpt-5.5"));
 }

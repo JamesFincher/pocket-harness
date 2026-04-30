@@ -8,9 +8,13 @@ use clap::{Parser, Subcommand};
 
 use pocket_harness::config_store::{ConfigSource, ConfigStore, digest_text};
 use pocket_harness::connector::ConnectorManager;
+use pocket_harness::provider_catalog::{
+    ProviderCatalog, ensure_default_catalog, format_models, format_providers,
+};
 
 #[derive(Debug, Parser)]
 #[command(name = "pocket-harness")]
+#[command(version)]
 #[command(about = "A config-driven mobile harness gateway for local AI systems.")]
 struct Cli {
     #[arg(short, long, default_value = "pocket-harness.yaml")]
@@ -50,6 +54,12 @@ enum Command {
         #[arg(long)]
         once: bool,
     },
+    /// Poll Telegram and handle setup/run commands.
+    Telegram,
+    /// List providers from providers.yaml.
+    Providers,
+    /// List models for a provider from providers.yaml.
+    Models { provider: Option<String> },
 }
 
 fn main() -> Result<()> {
@@ -60,6 +70,9 @@ fn main() -> Result<()> {
         Command::Init { force } => {
             store.init_default(force)?;
             println!("initialized {}", store.config_path().display());
+            let active = store.load_with_recovery()?;
+            let catalog_path = ensure_default_catalog(store.config_path(), &active.config, force)?;
+            println!("initialized {}", catalog_path.display());
         }
         Command::Check { health } => {
             if health {
@@ -116,6 +129,20 @@ fn main() -> Result<()> {
         }
         Command::Watch { once } => {
             watch_config(&store, once)?;
+        }
+        Command::Telegram => {
+            pocket_harness::telegram::run_gateway(store)?;
+        }
+        Command::Providers => {
+            let active = store.load_with_recovery()?;
+            let catalog = ProviderCatalog::load_for_config(store.config_path(), &active.config)?;
+            println!("{}", format_providers(&catalog));
+        }
+        Command::Models { provider } => {
+            let active = store.load_with_recovery()?;
+            let catalog = ProviderCatalog::load_for_config(store.config_path(), &active.config)?;
+            let provider = provider.unwrap_or(active.config.llm_router.provider);
+            println!("{}", format_models(&catalog, &provider)?);
         }
     }
 

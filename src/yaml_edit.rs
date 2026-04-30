@@ -7,11 +7,18 @@ use serde_yaml::{Mapping, Number, Value};
 use crate::config_store::{atomic_write, parse_and_validate};
 
 pub fn set_value(config_path: &Path, dotted_path: &str, raw_value: &str) -> Result<()> {
+    set_values(config_path, &[(dotted_path, raw_value)])
+}
+
+pub fn set_values(config_path: &Path, edits: &[(&str, &str)]) -> Result<()> {
     let text = fs::read_to_string(config_path)
         .with_context(|| format!("read config {}", config_path.display()))?;
     let mut value: Value = serde_yaml::from_str(&text).context("parse yaml before edit")?;
-    let path = parse_path(dotted_path)?;
-    set_nested_value(&mut value, &path, parse_scalar(raw_value))?;
+
+    for (dotted_path, raw_value) in edits {
+        let path = parse_path(dotted_path)?;
+        set_nested_value(&mut value, &path, parse_scalar(raw_value))?;
+    }
 
     let new_text = serde_yaml::to_string(&value).context("serialize edited yaml")?;
     parse_and_validate(&new_text).context("edited config did not validate")?;
@@ -69,6 +76,12 @@ fn set_nested_value(value: &mut Value, path: &[String], new_value: Value) -> Res
 fn parse_scalar(raw: &str) -> Value {
     let trimmed = raw.trim();
 
+    let looks_structured = (trimmed.starts_with('[') && trimmed.ends_with(']'))
+        || (trimmed.starts_with('{') && trimmed.ends_with('}'));
+    if looks_structured && let Ok(parsed) = serde_yaml::from_str::<Value>(trimmed) {
+        return parsed;
+    }
+
     match trimmed {
         "true" => return Value::Bool(true),
         "false" => return Value::Bool(false),
@@ -109,6 +122,10 @@ mod tests {
     fn parses_scalar_types() {
         assert_eq!(parse_scalar("true"), Value::Bool(true));
         assert_eq!(parse_scalar("42"), serde_yaml::to_value(42).unwrap());
+        assert_eq!(
+            parse_scalar("[1, 2]"),
+            serde_yaml::to_value(vec![1, 2]).unwrap()
+        );
         assert_eq!(parse_scalar("hello"), Value::String("hello".to_string()));
     }
 }

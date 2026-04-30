@@ -230,6 +230,38 @@ esac
 }
 
 #[test]
+fn run_request_includes_selected_llm_metadata_without_api_key() {
+    let temp = tempfile::tempdir().unwrap();
+    let script = temp.path().join("metadata_connector.sh");
+    executable_script(
+        &script,
+        r#"#!/bin/sh
+request=$(cat)
+case "$request" in *sk-test-secret*) printf '%s\n' '{"ok":false,"message":"secret leaked"}'; exit 0 ;; esac
+case "$request" in *'"llm_provider":"openai"'*) ;; *) printf '%s\n' "$request" >&2; exit 8 ;; esac
+case "$request" in *'"llm_model":"gpt-5.5"'*) ;; *) printf '%s\n' "$request" >&2; exit 8 ;; esac
+case "$request" in *'"llm_api_key_configured":true'*) ;; *) printf '%s\n' "$request" >&2; exit 8 ;; esac
+printf '%s\n' '{"ok":true,"message":"metadata included"}'
+"#,
+    );
+
+    let mut config = config_with_default_json(
+        "metadata",
+        json_connector_config(vec![script.to_string_lossy().to_string()], temp.path(), 5),
+    );
+    config.llm_router.enabled = true;
+    config.llm_router.provider = "openai".to_string();
+    config.llm_router.model = "gpt-5.5".to_string();
+    config.llm_router.api_key = "sk-test-secret".to_string();
+    config.validate().unwrap();
+
+    let response = ConnectorManager::new(&config).run("main", "hello").unwrap();
+
+    assert!(response.ok);
+    assert_eq!(response.message, "metadata included");
+}
+
+#[test]
 fn unknown_thread_uses_default_connector_and_main_thread_settings() {
     let temp = tempfile::tempdir().unwrap();
     let mut config = AppConfig::default();

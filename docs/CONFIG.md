@@ -11,7 +11,7 @@ hot-reload loop promotes valid changes without restart.
 - `recovery`: last-known-good behavior.
 - `features`: every parent-owned feature and its enablement settings.
 - `mobile`: mobile gateways such as Telegram.
-- `llm_router`: optional parent-level natural command routing.
+- `llm_router`: selected provider/model/API key and the provider catalog path.
 - `connectors`: connector definitions.
 - `threads`: per-thread connector, cwd, queue, watch, and reply preferences.
 
@@ -71,6 +71,28 @@ connectors:
       settings:
         mode: safe
 ```
+
+## Provider Catalog
+
+`providers.yaml` is the model/provider index. The main config points at it:
+
+```yaml
+llm_router:
+  catalog_path: providers.yaml
+  provider: openai
+  base_url: https://api.openai.com/v1
+  api_key: "$OPENAI_API_KEY"
+  model: gpt-5.5
+```
+
+Use:
+
+```bash
+pocket-harness providers
+pocket-harness models openai
+```
+
+Telegram setup commands read the same catalog and update these `llm_router` fields.
 
 ## Private State
 

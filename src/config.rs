@@ -28,6 +28,8 @@ pub enum ConfigError {
     MissingLlmProvider,
     #[error("llm_router is enabled but llm_router.model is empty")]
     MissingLlmModel,
+    #[error("llm_router is enabled but llm_router.api_key is empty")]
+    MissingLlmApiKey,
     #[error("feature `{0}` is not available in the parent feature registry")]
     UnknownFeature(String),
 }
@@ -123,6 +125,9 @@ impl AppConfig {
             }
             if self.llm_router.model.trim().is_empty() {
                 return Err(ConfigError::MissingLlmModel);
+            }
+            if expand_string(&self.llm_router.api_key).trim().is_empty() {
+                return Err(ConfigError::MissingLlmApiKey);
             }
         }
 
@@ -471,6 +476,7 @@ impl Default for TelegramConfig {
 #[serde(default)]
 pub struct LlmRouterConfig {
     pub enabled: bool,
+    pub catalog_path: String,
     pub provider: String,
     pub base_url: String,
     pub api_key: String,
@@ -483,7 +489,8 @@ impl Default for LlmRouterConfig {
     fn default() -> Self {
         Self {
             enabled: false,
-            provider: "openai_compatible".to_string(),
+            catalog_path: "providers.yaml".to_string(),
+            provider: "openai".to_string(),
             base_url: "https://api.openai.com/v1".to_string(),
             api_key: "$OPENAI_API_KEY".to_string(),
             model: "".to_string(),

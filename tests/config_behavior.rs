@@ -154,6 +154,15 @@ fn rejects_missing_telegram_and_llm_required_fields() {
     assert_config_error(&missing_llm_model, |error| {
         matches!(error, ConfigError::MissingLlmModel)
     });
+
+    let mut missing_llm_api_key = AppConfig::default();
+    missing_llm_api_key.llm_router.enabled = true;
+    missing_llm_api_key.llm_router.provider = "openai".to_string();
+    missing_llm_api_key.llm_router.model = "gpt-test".to_string();
+    missing_llm_api_key.llm_router.api_key = "   ".to_string();
+    assert_config_error(&missing_llm_api_key, |error| {
+        matches!(error, ConfigError::MissingLlmApiKey)
+    });
 }
 
 #[test]

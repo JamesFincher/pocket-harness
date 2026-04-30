@@ -54,7 +54,8 @@ mobile:
     poll_timeout_seconds: 25
 llm_router:
   enabled: false
-  provider: openai_compatible
+  catalog_path: providers.yaml
+  provider: openai
   base_url: https://api.openai.com/v1
   api_key: $OPENAI_API_KEY
   model: ''

@@ -1,0 +1,261 @@
+schema_version: 1
+updated: "2026-04-30"
+providers:
+  openai:
+    display_name: OpenAI
+    api_format: openai_compatible
+    base_url: https://api.openai.com/v1
+    token_env: OPENAI_API_KEY
+    default_model: gpt-5.5
+    docs:
+      - https://developers.openai.com/api/docs/models
+      - https://platform.openai.com/docs/pricing
+    models:
+      gpt-5.5:
+        display_name: GPT-5.5
+        provider_model_id: gpt-5.5
+        context_window: 1050000
+        max_output_tokens: 128000
+        input_usd_per_1m: 5.00
+        output_usd_per_1m: 30.00
+        capabilities: [text, reasoning, tools, coding]
+        notes: Frontier general-purpose model.
+      gpt-5.4:
+        display_name: GPT-5.4
+        provider_model_id: gpt-5.4
+        context_window: 1050000
+        max_output_tokens: 128000
+        input_usd_per_1m: 2.50
+        output_usd_per_1m: 15.00
+        capabilities: [text, reasoning, tools, coding]
+      gpt-5.4-mini:
+        display_name: GPT-5.4 Mini
+        provider_model_id: gpt-5.4-mini
+        context_window: 400000
+        max_output_tokens: 128000
+        input_usd_per_1m: 0.75
+        output_usd_per_1m: 4.50
+        capabilities: [text, reasoning, tools, coding]
+      gpt-5.4-nano:
+        display_name: GPT-5.4 Nano
+        provider_model_id: gpt-5.4-nano
+        context_window: 400000
+        max_output_tokens: 128000
+        input_usd_per_1m: 0.20
+        output_usd_per_1m: 1.25
+        capabilities: [text, tools]
+  anthropic:
+    display_name: Anthropic
+    api_format: anthropic
+    base_url: https://api.anthropic.com/v1
+    token_env: ANTHROPIC_API_KEY
+    default_model: claude-sonnet-4-6
+    docs:
+      - https://platform.claude.com/docs/en/docs/about-claude/models
+      - https://platform.claude.com/docs/en/about-claude/pricing
+    models:
+      claude-opus-4-7:
+        display_name: Claude Opus 4.7
+        provider_model_id: claude-opus-4-7
+        context_window: 1000000
+        max_output_tokens: 128000
+        input_usd_per_1m: 5.00
+        output_usd_per_1m: 25.00
+        capabilities: [text, reasoning, tools, coding]
+      claude-sonnet-4-6:
+        display_name: Claude Sonnet 4.6
+        provider_model_id: claude-sonnet-4-6
+        context_window: 1000000
+        max_output_tokens: 64000
+        input_usd_per_1m: 3.00
+        output_usd_per_1m: 15.00
+        capabilities: [text, reasoning, tools, coding]
+      claude-haiku-4-5:
+        display_name: Claude Haiku 4.5
+        provider_model_id: claude-haiku-4-5
+        context_window: 200000
+        max_output_tokens: 64000
+        input_usd_per_1m: 1.00
+        output_usd_per_1m: 5.00
+        capabilities: [text, tools, coding]
+  google:
+    display_name: Google Gemini
+    api_format: google_gemini
+    base_url: https://generativelanguage.googleapis.com/v1beta
+    token_env: GEMINI_API_KEY
+    default_model: gemini-3.1-pro-preview
+    docs:
+      - https://ai.google.dev/gemini-api/docs/models
+      - https://ai.google.dev/gemini-api/docs/pricing
+    models:
+      gemini-3.1-pro-preview:
+        display_name: Gemini 3.1 Pro Preview
+        provider_model_id: gemini-3.1-pro-preview
+        context_window: 1000000
+        max_output_tokens: 64000
+        input_usd_per_1m: 2.00
+        output_usd_per_1m: 9.00
+        capabilities: [text, reasoning, tools, coding, multimodal]
+        notes: Catalog uses the >200k token paid-tier price; <=200k prompts are lower.
+      gemini-3-flash-preview:
+        display_name: Gemini 3 Flash Preview
+        provider_model_id: gemini-3-flash-preview
+        context_window: 1000000
+        max_output_tokens: 64000
+        input_usd_per_1m: 0.50
+        output_usd_per_1m: 3.00
+        capabilities: [text, tools, coding, multimodal]
+      gemini-3.1-flash-lite-preview:
+        display_name: Gemini 3.1 Flash-Lite Preview
+        provider_model_id: gemini-3.1-flash-lite-preview
+        context_window: 1000000
+        max_output_tokens: 64000
+        input_usd_per_1m: 0.25
+        output_usd_per_1m: 1.50
+        capabilities: [text, tools, multimodal]
+  mistral:
+    display_name: Mistral AI
+    api_format: openai_compatible
+    base_url: https://api.mistral.ai/v1
+    token_env: MISTRAL_API_KEY
+    default_model: mistral-large-latest
+    docs:
+      - https://docs.mistral.ai/models/overview
+      - https://mistral.ai/pricing
+    models:
+      mistral-large-latest:
+        display_name: Mistral Large Latest
+        provider_model_id: mistral-large-latest
+        context_window: 128000
+        max_output_tokens: 32000
+        input_usd_per_1m:
+        output_usd_per_1m:
+        capabilities: [text, reasoning, tools, coding]
+        notes: Pricing changes on La Plateforme; verify before cost-sensitive use.
+      codestral-latest:
+        display_name: Codestral Latest
+        provider_model_id: codestral-latest
+        context_window: 256000
+        max_output_tokens: 32000
+        input_usd_per_1m:
+        output_usd_per_1m:
+        capabilities: [text, tools, coding]
+  xai:
+    display_name: xAI
+    api_format: openai_compatible
+    base_url: https://api.x.ai/v1
+    token_env: XAI_API_KEY
+    default_model: grok-4.20
+    docs:
+      - https://docs.x.ai/developers/models
+    models:
+      grok-4.20:
+        display_name: Grok 4.20
+        provider_model_id: grok-4.20
+        context_window: 2000000
+        max_output_tokens: 30000
+        input_usd_per_1m:
+        output_usd_per_1m:
+        capabilities: [text, reasoning, tools, coding]
+        notes: xAI docs recommend Grok 4.20; token pricing is shown in the xAI console/model detail pages.
+      grok-4:
+        display_name: Grok 4
+        provider_model_id: grok-4
+        context_window: 256000
+        max_output_tokens: 30000
+        input_usd_per_1m:
+        output_usd_per_1m:
+        capabilities: [text, reasoning, tools, coding]
+  deepseek:
+    display_name: DeepSeek
+    api_format: openai_compatible
+    base_url: https://api.deepseek.com/v1
+    token_env: DEEPSEEK_API_KEY
+    default_model: deepseek-v4-flash
+    docs:
+      - https://api-docs.deepseek.com/quick_start/pricing
+    models:
+      deepseek-v4-flash:
+        display_name: DeepSeek V4 Flash
+        provider_model_id: deepseek-v4-flash
+        context_window: 1000000
+        max_output_tokens: 384000
+        input_usd_per_1m: 0.14
+        cached_input_usd_per_1m: 0.0028
+        output_usd_per_1m: 0.28
+        capabilities: [text, reasoning, tools, coding]
+      deepseek-v4-pro:
+        display_name: DeepSeek V4 Pro
+        provider_model_id: deepseek-v4-pro
+        context_window: 1000000
+        max_output_tokens: 384000
+        input_usd_per_1m: 0.435
+        cached_input_usd_per_1m: 0.003625
+        output_usd_per_1m: 0.87
+        capabilities: [text, reasoning, tools, coding]
+        notes: Price reflects DeepSeek's temporary 75% discount listed through 2026-05-31.
+      deepseek-reasoner:
+        display_name: DeepSeek Reasoner Alias
+        provider_model_id: deepseek-reasoner
+        context_window: 1000000
+        max_output_tokens: 384000
+        input_usd_per_1m: 0.14
+        cached_input_usd_per_1m: 0.0028
+        output_usd_per_1m: 0.28
+        capabilities: [text, reasoning, coding]
+        notes: Compatibility alias for DeepSeek V4 Flash thinking mode.
+  groq:
+    display_name: Groq
+    api_format: openai_compatible
+    base_url: https://api.groq.com/openai/v1
+    token_env: GROQ_API_KEY
+    default_model: llama-3.3-70b-versatile
+    docs:
+      - https://console.groq.com/docs/models
+      - https://groq.com/pricing
+    models:
+      llama-3.3-70b-versatile:
+        display_name: Llama 3.3 70B Versatile
+        provider_model_id: llama-3.3-70b-versatile
+        context_window: 128000
+        max_output_tokens: 32768
+        input_usd_per_1m: 0.59
+        output_usd_per_1m: 0.79
+        capabilities: [text, tools, coding]
+      openai/gpt-oss-120b:
+        display_name: GPT-OSS 120B
+        provider_model_id: openai/gpt-oss-120b
+        context_window: 131072
+        max_output_tokens: 65536
+        input_usd_per_1m: 0.15
+        output_usd_per_1m: 0.60
+        capabilities: [text, reasoning, tools, coding]
+  openrouter:
+    display_name: OpenRouter
+    api_format: openai_compatible
+    base_url: https://openrouter.ai/api/v1
+    token_env: OPENROUTER_API_KEY
+    default_model: openai/gpt-5.5
+    allow_custom_models: true
+    docs:
+      - https://openrouter.ai/docs/overview/models
+      - https://openrouter.ai/docs/quickstart
+    models:
+      openai/gpt-5.5:
+        display_name: GPT-5.5 via OpenRouter
+        provider_model_id: openai/gpt-5.5
+        context_window: 1050000
+        max_output_tokens: 128000
+        input_usd_per_1m:
+        output_usd_per_1m:
+        capabilities: [text, reasoning, tools, coding]
+        notes: OpenRouter publishes provider-specific live pricing; verify in their model list.
+      anthropic/claude-sonnet-4-6:
+        display_name: Claude Sonnet 4.6 via OpenRouter
+        provider_model_id: anthropic/claude-sonnet-4-6
+        context_window: 1000000
+        max_output_tokens: 64000
+        input_usd_per_1m:
+        output_usd_per_1m:
+        capabilities: [text, reasoning, tools, coding]
+        notes: OpenRouter publishes provider-specific live pricing; verify in their model list.

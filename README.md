@@ -24,10 +24,15 @@ This repo is an early scaffold with a working core:
 - generic one-shot JSON connector runner
 - built-in echo connector for local smoke tests
 - initial bundled Symphony connector with health, status, dry-run, and command-delegation modes
+- `providers.yaml` model/provider catalog for OpenAI, Anthropic, Google, Mistral, xAI, DeepSeek,
+  Groq, and OpenRouter
+- Telegram gateway commands for setup, provider/model selection, provider API token entry, health
+  checks, and runs
 - transaction-style `set` command for updating YAML values
 - a testing guide in `TEST.md`
 
-Telegram and full Symphony mobile execution are next layers; the core is ready for them.
+Full Symphony mobile execution is the next layer; the core and Telegram control plane are ready for
+local testing.
 
 ## Quick Start
 
@@ -35,7 +40,23 @@ Telegram and full Symphony mobile execution are next layers; the core is ready f
 cargo run -- init --force
 cargo run -- check --health
 cargo run -- features
+cargo run -- providers
+cargo run -- models openai
 cargo run -- run --thread main hello from mobile
+```
+
+Install locally:
+
+```bash
+cargo install --path . --force
+pocket-harness --help
+```
+
+Start Telegram after setting `TELEGRAM_BOT_TOKEN`:
+
+```bash
+cargo run -- set mobile.telegram.enabled true
+cargo run -- telegram
 ```
 
 Run the hot-reload loop:
@@ -76,6 +97,8 @@ language because the default connector interface is JSON over stdin/stdout.
 
 - [Connector Spec](docs/CONNECTOR_SPEC.md)
 - [Config Guide](docs/CONFIG.md)
+- [Provider Catalog](docs/PROVIDERS.md)
+- [Telegram Setup](docs/TELEGRAM.md)
 - [Reliability Model](docs/RELIABILITY.md)
 - [LLM Connector Guide](docs/LLM_CONNECTOR_GUIDE.md)
 - [Testing Guide](TEST.md)

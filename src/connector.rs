@@ -10,7 +10,8 @@ use uuid::Uuid;
 use wait_timeout::ChildExt;
 
 use crate::config::{
-    AppConfig, ConnectorConfig, ConnectorKind, ThreadConfig, expand_path, expand_string,
+    AppConfig, ConnectorConfig, ConnectorKind, LlmRouterConfig, ThreadConfig, expand_path,
+    expand_string,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -128,7 +129,14 @@ impl<'a> ConnectorManager<'a> {
     pub fn run(&self, thread_name: &str, prompt: &str) -> Result<ConnectorResponse> {
         let (connector_name, connector) = self.config.connector_for_thread(thread_name)?;
         let thread = self.config.thread_or_default(thread_name);
-        let request = run_request(connector_name, thread_name, connector, &thread, prompt);
+        let request = run_request(
+            connector_name,
+            thread_name,
+            connector,
+            &thread,
+            &self.config.llm_router,
+            prompt,
+        );
         self.dispatch(connector, request)
     }
 
@@ -217,6 +225,7 @@ fn run_request(
     thread_name: &str,
     connector: &ConnectorConfig,
     thread: &ThreadConfig,
+    llm_router: &LlmRouterConfig,
     prompt: &str,
 ) -> ConnectorRequest {
     let cwd = if thread.cwd.trim().is_empty() {
@@ -224,6 +233,36 @@ fn run_request(
     } else {
         expand_path(&thread.cwd).to_string_lossy().to_string()
     };
+
+    let mut metadata = BTreeMap::from([
+        (
+            "connector".to_string(),
+            Value::String(connector_name.to_string()),
+        ),
+        (
+            "reply_style".to_string(),
+            Value::String(format!("{:?}", thread.reply_style).to_lowercase()),
+        ),
+    ]);
+
+    if llm_router.enabled {
+        metadata.insert(
+            "llm_provider".to_string(),
+            Value::String(llm_router.provider.clone()),
+        );
+        metadata.insert(
+            "llm_model".to_string(),
+            Value::String(llm_router.model.clone()),
+        );
+        metadata.insert(
+            "llm_base_url".to_string(),
+            Value::String(llm_router.base_url.clone()),
+        );
+        metadata.insert(
+            "llm_api_key_configured".to_string(),
+            Value::Bool(!expand_string(&llm_router.api_key).trim().is_empty()),
+        );
+    }
 
     ConnectorRequest {
         kind: ConnectorRequestKind::Run,
@@ -233,16 +272,7 @@ fn run_request(
         cwd,
         attachments: Vec::new(),
         settings: connector.settings.clone(),
-        metadata: BTreeMap::from([
-            (
-                "connector".to_string(),
-                Value::String(connector_name.to_string()),
-            ),
-            (
-                "reply_style".to_string(),
-                Value::String(format!("{:?}", thread.reply_style).to_lowercase()),
-            ),
-        ]),
+        metadata,
     }
 }
 

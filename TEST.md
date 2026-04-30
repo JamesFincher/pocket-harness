@@ -51,6 +51,16 @@ temporary config path. This avoids touching the developer's real
 - `parses_scalar_types` covers scalar parsing for booleans, integers, and
   unquoted strings used by the `set` command.
 
+`src/provider_catalog.rs`
+
+- Covers parsing the bundled `providers.yaml` catalog and formatting provider
+  model summaries with context and price data.
+
+`src/telegram.rs`
+
+- Covers Telegram setup commands that update provider/model/token settings in
+  YAML without making live Telegram network calls.
+
 `src/jobs.rs`
 
 - `queues_starts_finishes_and_records_receipts` covers the basic parent-owned
@@ -71,7 +81,8 @@ temporary config path. This avoids touching the developer's real
 `tests/cli_behavior.rs`
 
 - Covers the compiled binary boundary for `init`, `check --health`, `run`,
-  `set`, and the no-overwrite behavior of `init` without `--force`.
+  `set`, provider/model catalog listing, and the no-overwrite behavior of
+  `init` without `--force`.
 - Uses a temporary `HOME` so CLI tests do not touch the developer's real
   `~/.pocket-harness` state.
 
@@ -88,6 +99,8 @@ temporary config path. This avoids touching the developer's real
   log noise, non-zero exits, timeouts, environment expansion, and unknown thread
   fallback to `main` thread settings.
 - Covers parent rejection when a connector health response reports `ok: false`.
+- Covers selected LLM provider/model metadata propagation to connectors without
+  leaking the raw API key.
 
 `tests/symphony_connector_behavior.rs`
 
@@ -197,5 +210,9 @@ As features are added, add tests near the behavior boundary:
   supported user interface.
 - Connector contract tests for every bundled connector, using fixtures that can
   run locally without credentials.
+- Telegram command tests for setup flows, authorization rules, and YAML updates
+  without live Telegram calls.
+- Provider catalog tests whenever new provider metadata fields or update flows
+  are added.
 - Reliability tests for timeout, retry, crash, malformed response, and partial
   write scenarios.
