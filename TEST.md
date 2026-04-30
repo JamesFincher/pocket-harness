@@ -10,7 +10,9 @@ value parsing.
 Run the full suite:
 
 ```bash
+cargo fmt --check
 cargo test
+cargo clippy --all-targets -- -D warnings
 ```
 
 Run one integration test file:
@@ -36,6 +38,10 @@ Run the CLI manually against the default config:
 cargo run -- check --health
 cargo run -- run --thread main hello
 ```
+
+For isolation testing, run the compiled binary with a temporary `HOME` and
+temporary config path. This avoids touching the developer's real
+`~/.pocket-harness` state.
 
 ## Current Test Coverage
 
@@ -180,4 +186,3 @@ As features are added, add tests near the behavior boundary:
   run locally without credentials.
 - Reliability tests for timeout, retry, crash, malformed response, and partial
   write scenarios.
-- CLI tests when command output or exit status becomes a supported interface.

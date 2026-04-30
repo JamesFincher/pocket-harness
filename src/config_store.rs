@@ -135,10 +135,10 @@ impl ConfigStore {
         text: &str,
         state_dir: &Path,
     ) -> Result<()> {
-        fs::create_dir_all(&state_dir)
+        fs::create_dir_all(state_dir)
             .with_context(|| format!("create state dir {}", state_dir.display()))?;
 
-        let lkg_path = last_known_good_path(&state_dir);
+        let lkg_path = last_known_good_path(state_dir);
         atomic_write(&lkg_path, text)?;
 
         let history_dir = state_dir.join("config-history");

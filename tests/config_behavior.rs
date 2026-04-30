@@ -68,8 +68,10 @@ fn selects_thread_specific_connector_or_default_connector() {
         },
     );
 
-    let mut explicit_thread = ThreadConfig::default();
-    explicit_thread.connector = Some("worker".to_string());
+    let explicit_thread = ThreadConfig {
+        connector: Some("worker".to_string()),
+        ..Default::default()
+    };
     config
         .threads
         .insert("explicit".to_string(), explicit_thread);
@@ -91,8 +93,10 @@ fn selects_thread_specific_connector_or_default_connector() {
 #[test]
 fn rejects_unknown_thread_connector() {
     let mut config = AppConfig::default();
-    let mut thread = ThreadConfig::default();
-    thread.connector = Some("missing".to_string());
+    let thread = ThreadConfig {
+        connector: Some("missing".to_string()),
+        ..Default::default()
+    };
     config.threads.insert("mobile".to_string(), thread);
 
     assert_config_error(&config, |error| {

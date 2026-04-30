@@ -131,8 +131,10 @@ fn connector_selected_by_secondary_thread_gets_feature_requirements() {
         .definitions
         .insert("json".to_string(), json_connector());
 
-    let mut mobile = ThreadConfig::default();
-    mobile.connector = Some("json".to_string());
+    let mobile = ThreadConfig {
+        connector: Some("json".to_string()),
+        ..Default::default()
+    };
     config.threads.insert("mobile".to_string(), mobile);
 
     let manager = ConnectorManager::new(&config);

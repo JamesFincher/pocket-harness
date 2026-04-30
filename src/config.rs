@@ -325,16 +325,10 @@ impl Default for FeaturesConfig {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct FeatureToggle {
     pub enabled: bool,
-}
-
-impl Default for FeatureToggle {
-    fn default() -> Self {
-        Self { enabled: false }
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -529,9 +523,10 @@ impl Default for ConnectorsConfig {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ConnectorKind {
+    #[default]
     BuiltinEcho,
     Json,
 }
@@ -585,16 +580,10 @@ impl Default for ThreadConfig {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ThreadWatchConfig {
     pub enabled: bool,
-}
-
-impl Default for ThreadWatchConfig {
-    fn default() -> Self {
-        Self { enabled: false }
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -609,26 +598,27 @@ impl Default for ThreadQueueConfig {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ReplyStyle {
     Brief,
+    #[default]
     Normal,
     Verbose,
 }
 
 pub fn expand_path(raw: &str) -> PathBuf {
     let expanded = expand_string(raw);
-    if let Some(rest) = expanded.strip_prefix("~/") {
-        if let Some(home) = home_dir() {
-            return home.join(rest);
-        }
+    if let Some(rest) = expanded.strip_prefix("~/")
+        && let Some(home) = home_dir()
+    {
+        return home.join(rest);
     }
 
-    if expanded == "~" {
-        if let Some(home) = home_dir() {
-            return home;
-        }
+    if expanded == "~"
+        && let Some(home) = home_dir()
+    {
+        return home;
     }
 
     PathBuf::from(expanded)
@@ -695,16 +685,4 @@ pub fn default_state_dir(config_path: &Path) -> PathBuf {
 
 pub fn home_dir() -> Option<PathBuf> {
     env::var_os("HOME").map(PathBuf::from)
-}
-
-impl Default for ConnectorKind {
-    fn default() -> Self {
-        Self::BuiltinEcho
-    }
-}
-
-impl Default for ReplyStyle {
-    fn default() -> Self {
-        Self::Normal
-    }
 }
