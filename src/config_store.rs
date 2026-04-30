@@ -119,6 +119,22 @@ impl ConfigStore {
 
     pub fn promote(&self, config: &AppConfig, text: &str) -> Result<()> {
         let state_dir = config.data_dir(&self.config_path);
+        self.write_last_known_good_snapshot(config, text, &state_dir)?;
+
+        let fallback_state_dir = default_state_dir(&self.config_path);
+        if fallback_state_dir != state_dir {
+            self.write_last_known_good_snapshot(config, text, &fallback_state_dir)?;
+        }
+
+        Ok(())
+    }
+
+    fn write_last_known_good_snapshot(
+        &self,
+        config: &AppConfig,
+        text: &str,
+        state_dir: &Path,
+    ) -> Result<()> {
         fs::create_dir_all(&state_dir)
             .with_context(|| format!("create state dir {}", state_dir.display()))?;
 

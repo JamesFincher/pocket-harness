@@ -9,7 +9,9 @@ use serde_json::Value;
 use uuid::Uuid;
 use wait_timeout::ChildExt;
 
-use crate::config::{AppConfig, ConnectorConfig, ConnectorKind, ThreadConfig, expand_path, expand_string};
+use crate::config::{
+    AppConfig, ConnectorConfig, ConnectorKind, ThreadConfig, expand_path, expand_string,
+};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -95,7 +97,11 @@ impl<'a> ConnectorManager<'a> {
         self.dispatch(connector, request)
     }
 
-    pub fn capabilities(&self, name: &str, connector: &ConnectorConfig) -> Result<ConnectorResponse> {
+    pub fn capabilities(
+        &self,
+        name: &str,
+        connector: &ConnectorConfig,
+    ) -> Result<ConnectorResponse> {
         let request = ConnectorRequest {
             kind: ConnectorRequestKind::Capabilities,
             request_id: Uuid::new_v4().to_string(),
@@ -222,7 +228,11 @@ fn run_json_connector(
         .first()
         .ok_or_else(|| anyhow!("json connector command is empty"))?;
 
-    let args = connector.command.iter().skip(1).map(|arg| expand_string(arg));
+    let args = connector
+        .command
+        .iter()
+        .skip(1)
+        .map(|arg| expand_string(arg));
     let cwd = expand_path(&connector.cwd);
     let timeout = Duration::from_secs(connector.timeout_seconds);
 

@@ -42,14 +42,9 @@ enum Command {
         prompt: Vec<String>,
     },
     /// Check one connector, or all connectors when omitted.
-    Health {
-        connector: Option<String>,
-    },
+    Health { connector: Option<String> },
     /// Update a YAML value transactionally.
-    Set {
-        path: String,
-        value: String,
-    },
+    Set { path: String, value: String },
     /// Poll config and hot-promote valid changes.
     Watch {
         #[arg(long)]
@@ -163,7 +158,9 @@ fn watch_config(store: &ConfigStore, once: bool) -> Result<()> {
         match store.stage_with_connector_check(validate_all_connectors) {
             Ok(next) => {
                 if next.source == ConfigSource::LastKnownGood {
-                    println!("config changed but connector health failed; rolled back to last-known-good");
+                    println!(
+                        "config changed but connector health failed; rolled back to last-known-good"
+                    );
                 } else {
                     println!("hot-promoted config {}", store.config_path().display());
                 }

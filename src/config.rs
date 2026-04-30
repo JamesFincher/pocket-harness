@@ -110,7 +110,9 @@ impl AppConfig {
         }
 
         if self.mobile.telegram.enabled
-            && expand_string(&self.mobile.telegram.bot_token).trim().is_empty()
+            && expand_string(&self.mobile.telegram.bot_token)
+                .trim()
+                .is_empty()
         {
             return Err(ConfigError::MissingTelegramToken);
         }
@@ -190,7 +192,10 @@ impl AppConfig {
         keys
     }
 
-    pub fn connector_for_thread(&self, thread_name: &str) -> Result<(&str, &ConnectorConfig), ConfigError> {
+    pub fn connector_for_thread(
+        &self,
+        thread_name: &str,
+    ) -> Result<(&str, &ConnectorConfig), ConfigError> {
         let thread = self.threads.get(thread_name);
         let connector_name = thread
             .and_then(|thread| thread.connector.as_deref())
