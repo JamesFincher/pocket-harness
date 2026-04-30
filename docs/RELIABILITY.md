@@ -44,9 +44,12 @@ Connector failures should not stop:
 
 Current scaffold behavior:
 
-- `check --health` validates all connectors.
+- `check --health` validates all connectors and rejects missing capabilities required by enabled
+  YAML features.
 - `watch` polls config, health-checks connector changes, and rolls back on connector break.
 - `run` reports connector failure without crashing the parent command.
+- Parent-owned job primitives queue, start, finish, cancel, and retain bounded safe receipts without
+  needing connector-specific state.
 
 ## Design Rule
 

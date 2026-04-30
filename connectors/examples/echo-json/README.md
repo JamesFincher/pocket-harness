@@ -24,3 +24,7 @@ Then run:
 cargo run -- check --health
 cargo run -- run --thread main test the connector
 ```
+
+The example reports the capabilities required by the default YAML feature set. If you remove
+capabilities from a connector, disable the matching feature in `pocket-harness.yaml` before running
+`check --health`.

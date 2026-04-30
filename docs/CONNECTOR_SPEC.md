@@ -47,7 +47,13 @@ Supported `kind` values:
 {
   "ok": true,
   "message": "Done. Fixed the test and ran the suite.",
-  "capabilities": ["connector.health", "connector.run", "threads.cwd"],
+  "capabilities": [
+    "connector.health",
+    "connector.run",
+    "connector.cancel",
+    "threads.cwd",
+    "attachments.images"
+  ],
   "retryable": false,
   "metadata": {}
 }
@@ -70,7 +76,9 @@ Connectors should report capabilities using the parent registry names where appl
 - `attachments.images`
 
 The parent uses capabilities during config promotion so a bad connector config can be rejected
-before it breaks the mobile gateway.
+before it breaks the mobile gateway. For a selected connector, the default YAML feature set requires
+`connector.health`, `connector.run`, `connector.cancel`, `threads.cwd`, and `attachments.images`.
+If a thread enables watch, the selected connector must also report `connector.stream`.
 
 ## Advanced Streaming
 

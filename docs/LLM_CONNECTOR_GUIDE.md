@@ -26,12 +26,26 @@ import sys
 request = json.loads(sys.stdin.readline())
 
 if request["kind"] == "health":
-    print(json.dumps({"ok": True, "message": "healthy"}))
+    print(json.dumps({
+        "ok": True,
+        "message": "healthy",
+        "capabilities": [
+            "connector.health",
+            "connector.run",
+            "connector.cancel",
+            "threads.cwd",
+            "attachments.images",
+        ],
+    }))
 elif request["kind"] == "run":
     print(json.dumps({"ok": True, "message": "handled: " + request["prompt"]}))
 else:
     print(json.dumps({"ok": True, "message": "accepted"}))
 ```
+
+The health response above includes the capabilities required by the default YAML. If your connector
+does not support one of those behaviors, disable the corresponding feature in `pocket-harness.yaml`
+or expect `check --health` to reject the connector.
 
 ## Good Connector Behavior
 

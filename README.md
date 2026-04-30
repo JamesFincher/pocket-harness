@@ -19,9 +19,12 @@ This repo is an early scaffold with a working core:
 - hot-reload loop
 - last-known-good config snapshots
 - rollback when connector health breaks after a config change
+- capability validation between enabled YAML features and connector health responses
+- parent-owned job queue/history primitives
 - generic one-shot JSON connector runner
 - built-in echo connector for local smoke tests
 - transaction-style `set` command for updating YAML values
+- a testing guide in `TEST.md`
 
 Telegram and the Symphony connector are next layers; the core is ready for them.
 
@@ -74,6 +77,7 @@ language because the default connector interface is JSON over stdin/stdout.
 - [Config Guide](docs/CONFIG.md)
 - [Reliability Model](docs/RELIABILITY.md)
 - [LLM Connector Guide](docs/LLM_CONNECTOR_GUIDE.md)
+- [Testing Guide](TEST.md)
 
 ## Git History
 

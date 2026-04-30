@@ -10,9 +10,11 @@ import sys
 CAPABILITIES = [
     "connector.health",
     "connector.run",
+    "connector.cancel",
     "connector.status",
     "connector.capabilities",
     "threads.cwd",
+    "attachments.images",
 ]
 
 

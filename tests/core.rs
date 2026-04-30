@@ -42,8 +42,8 @@ fn json_connector_runs_over_stdin_stdout() {
         r#"#!/bin/sh
 read request
 case "$request" in
-  *'"kind":"health"'*) printf '%s\n' '{"ok":true,"message":"healthy","capabilities":["connector.health","connector.run"]}' ;;
-  *) printf '%s\n' '{"ok":true,"message":"ran json connector","capabilities":["connector.health","connector.run"]}' ;;
+  *'"kind":"health"'*) printf '%s\n' '{"ok":true,"message":"healthy","capabilities":["connector.health","connector.run","connector.cancel","threads.cwd","attachments.images"]}' ;;
+  *) printf '%s\n' '{"ok":true,"message":"ran json connector","capabilities":["connector.health","connector.run","connector.cancel","threads.cwd","attachments.images"]}' ;;
 esac
 "#,
     )

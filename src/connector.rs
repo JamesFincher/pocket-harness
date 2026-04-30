@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::io::{Read, Write};
 use std::process::{Command, Stdio};
 use std::time::Duration;
@@ -76,8 +76,11 @@ impl<'a> ConnectorManager<'a> {
 
     pub fn check_all(&self) -> Result<()> {
         for (name, connector) in &self.config.connectors.definitions {
-            self.health(name, connector)
+            let health = self
+                .health(name, connector)
                 .with_context(|| format!("connector `{name}` health check failed"))?;
+            self.validate_capabilities(name, &health.capabilities)
+                .with_context(|| format!("connector `{name}` capability check failed"))?;
         }
         Ok(())
     }
@@ -132,6 +135,74 @@ impl<'a> ConnectorManager<'a> {
             ConnectorKind::BuiltinEcho => Ok(echo_response(&request)),
             ConnectorKind::Json => run_json_connector(connector, &request),
         }
+    }
+
+    pub fn validate_capabilities(
+        &self,
+        connector_name: &str,
+        capabilities: &[String],
+    ) -> Result<()> {
+        if capabilities.is_empty() {
+            return Ok(());
+        }
+
+        let actual = capabilities
+            .iter()
+            .map(String::as_str)
+            .collect::<BTreeSet<_>>();
+        let required = self.required_capabilities(connector_name);
+        let missing = required
+            .iter()
+            .filter(|capability| !actual.contains(capability.as_str()))
+            .cloned()
+            .collect::<Vec<_>>();
+
+        if missing.is_empty() {
+            Ok(())
+        } else {
+            Err(anyhow!("missing capabilities: {}", missing.join(", ")))
+        }
+    }
+
+    pub fn required_capabilities(&self, connector_name: &str) -> Vec<String> {
+        let mut required =
+            BTreeSet::from(["connector.health".to_string(), "connector.run".to_string()]);
+
+        let selected_threads = self.config.threads.values().filter(|thread| {
+            thread
+                .connector
+                .as_deref()
+                .unwrap_or(&self.config.connectors.default)
+                == connector_name
+        });
+
+        let mut selected_by_any_thread = false;
+        let mut selected_with_watch = false;
+
+        for thread in selected_threads {
+            selected_by_any_thread = true;
+            if thread.watch.enabled {
+                selected_with_watch = true;
+            }
+        }
+
+        if selected_by_any_thread && self.config.features.threads.enabled {
+            required.insert("threads.cwd".to_string());
+        }
+
+        if selected_by_any_thread && self.config.features.images.enabled {
+            required.insert("attachments.images".to_string());
+        }
+
+        if selected_by_any_thread && self.config.features.cancel.enabled {
+            required.insert("connector.cancel".to_string());
+        }
+
+        if selected_with_watch {
+            required.insert("connector.stream".to_string());
+        }
+
+        required.into_iter().collect()
     }
 }
 
@@ -209,7 +280,9 @@ fn default_capabilities() -> Vec<String> {
     [
         "connector.health",
         "connector.run",
+        "connector.cancel",
         "connector.status",
+        "connector.stream",
         "connector.capabilities",
         "threads.cwd",
         "attachments.images",
