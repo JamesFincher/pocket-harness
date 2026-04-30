@@ -23,10 +23,11 @@ This repo is an early scaffold with a working core:
 - parent-owned job queue/history primitives
 - generic one-shot JSON connector runner
 - built-in echo connector for local smoke tests
+- initial bundled Symphony connector with health, status, dry-run, and command-delegation modes
 - transaction-style `set` command for updating YAML values
 - a testing guide in `TEST.md`
 
-Telegram and the Symphony connector are next layers; the core is ready for them.
+Telegram and full Symphony mobile execution are next layers; the core is ready for them.
 
 ## Quick Start
 

@@ -79,6 +79,12 @@ impl<'a> ConnectorManager<'a> {
             let health = self
                 .health(name, connector)
                 .with_context(|| format!("connector `{name}` health check failed"))?;
+            if !health.ok {
+                return Err(anyhow!(
+                    "connector `{name}` reported unhealthy: {}",
+                    health.message
+                ));
+            }
             self.validate_capabilities(name, &health.capabilities)
                 .with_context(|| format!("connector `{name}` capability check failed"))?;
         }

@@ -24,6 +24,7 @@ cargo test --test capability_behavior
 cargo test --test connector_behavior
 cargo test --test config_behavior
 cargo test --test job_behavior
+cargo test --test symphony_connector_behavior
 ```
 
 Run one named test:
@@ -86,6 +87,14 @@ temporary config path. This avoids touching the developer's real
 - Covers built-in echo health/capabilities, JSON connector stdout parsing with
   log noise, non-zero exits, timeouts, environment expansion, and unknown thread
   fallback to `main` thread settings.
+- Covers parent rejection when a connector health response reports `ok: false`.
+
+`tests/symphony_connector_behavior.rs`
+
+- Covers the bundled Symphony connector against a fake local Symphony tree.
+- Verifies health and capability reporting, dry-run behavior without a worker
+  command, rejection when the workflow is missing, and delegation through
+  `settings.run_command`.
 
 `tests/core.rs`
 
@@ -153,6 +162,10 @@ rejects the connector during health/capability validation.
 For external connector examples, prefer temporary shell or Python scripts that
 read one JSON request from stdin and write one JSON response to stdout. Avoid
 network calls and long sleeps in the default suite.
+
+Bundled connector tests should not require real credentials or live AI systems.
+Use fake local project trees, command fixtures, and optional status endpoints so
+the default suite remains fast and deterministic.
 
 ## Reliability Test Conventions
 

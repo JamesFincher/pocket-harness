@@ -140,6 +140,33 @@ exit 7
 }
 
 #[test]
+fn connector_health_ok_false_fails_check_all() {
+    let temp = tempfile::tempdir().unwrap();
+    let script = temp.path().join("unhealthy_connector.sh");
+    executable_script(
+        &script,
+        r#"#!/bin/sh
+read request
+printf '%s\n' '{"ok":false,"message":"health probe failed","capabilities":["connector.health","connector.run","connector.cancel","threads.cwd","attachments.images"]}'
+"#,
+    );
+
+    let config = config_with_default_json(
+        "unhealthy",
+        json_connector_config(vec![script.to_string_lossy().to_string()], temp.path(), 5),
+    );
+    config.validate().unwrap();
+
+    let error = ConnectorManager::new(&config)
+        .check_all()
+        .unwrap_err()
+        .to_string();
+
+    assert!(error.contains("reported unhealthy"));
+    assert!(error.contains("health probe failed"));
+}
+
+#[test]
 fn json_connector_timeout_is_reported_as_failure() {
     let temp = tempfile::tempdir().unwrap();
     let script = temp.path().join("slow_connector.sh");

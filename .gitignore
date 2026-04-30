@@ -1,2 +1,4 @@
 /target
 /.pocket-harness-state
+__pycache__/
+*.py[cod]
