@@ -96,7 +96,7 @@ pub fn handle_text(
     }
 
     if !trimmed.starts_with('/') {
-        return run_prompt(config, "main", trimmed);
+        return run_prompt(config, catalog, "main", trimmed);
     }
 
     let mut parts = trimmed.splitn(2, char::is_whitespace);
@@ -133,7 +133,7 @@ pub fn handle_text(
             if args.is_empty() {
                 Ok("Usage: /run <prompt>".to_string())
             } else {
-                run_prompt(config, "main", args)
+                run_prompt(config, catalog, "main", args)
             }
         }
         _ => Ok(format!("Unknown command `{command}`.\n\n{}", help_text())),
@@ -240,7 +240,16 @@ fn set_ai_enabled(config_path: &Path, args: &str) -> Result<String> {
     Ok(format!("AI model routing is now {args}."))
 }
 
-fn run_prompt(config: &AppConfig, thread: &str, prompt: &str) -> Result<String> {
+fn run_prompt(
+    config: &AppConfig,
+    catalog: &ProviderCatalog,
+    thread: &str,
+    prompt: &str,
+) -> Result<String> {
+    if config.llm_router.enabled {
+        return crate::llm_router::run_prompt(config, catalog, prompt);
+    }
+
     let response = ConnectorManager::new(config).run(thread, prompt)?;
     if response.ok {
         Ok(response.message)
@@ -497,5 +506,24 @@ mod tests {
 
         assert!(reply.contains("gpt-5.5"));
         assert!(reply.contains("$5.00/1M in"));
+    }
+
+    #[test]
+    fn telegram_plain_text_uses_llm_router_when_enabled() {
+        let temp = tempfile::tempdir().unwrap();
+        let (store, config_path) = test_store(&temp);
+        let mut active = store.load_with_recovery().unwrap();
+        active.config.llm_router.enabled = true;
+        active.config.llm_router.provider = "openai".to_string();
+        active.config.llm_router.model = "gpt-5.5".to_string();
+        active.config.llm_router.api_key = "".to_string();
+        ensure_default_catalog(&config_path, &active.config, false).unwrap();
+        let catalog = ProviderCatalog::load_for_config(&config_path, &active.config).unwrap();
+
+        let error = handle_text(&config_path, &active.config, &catalog, "hello").unwrap_err();
+        let message = error.to_string();
+
+        assert!(message.contains("llm_router.api_key is empty"));
+        assert!(!message.contains("echo thread="));
     }
 }

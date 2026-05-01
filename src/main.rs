@@ -160,12 +160,21 @@ fn main() -> Result<()> {
         Command::Run { thread, prompt } => {
             let active = store.load_with_recovery()?;
             let prompt = prompt.join(" ");
-            let manager = ConnectorManager::new(&active.config);
-            let response = manager.run(&thread, &prompt)?;
-            if response.ok {
-                println!("{}", response.message);
+            if active.config.llm_router.enabled {
+                let catalog =
+                    ProviderCatalog::load_for_config(store.config_path(), &active.config)?;
+                println!(
+                    "{}",
+                    pocket_harness::llm_router::run_prompt(&active.config, &catalog, &prompt)?
+                );
             } else {
-                anyhow::bail!("connector returned error: {}", response.message);
+                let manager = ConnectorManager::new(&active.config);
+                let response = manager.run(&thread, &prompt)?;
+                if response.ok {
+                    println!("{}", response.message);
+                } else {
+                    anyhow::bail!("connector returned error: {}", response.message);
+                }
             }
         }
         Command::Health { connector } => {

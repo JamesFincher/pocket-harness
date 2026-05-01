@@ -4,6 +4,7 @@ pub mod connector;
 pub mod env_file;
 pub mod features;
 pub mod jobs;
+pub mod llm_router;
 pub mod provider_catalog;
 pub mod reset;
 pub mod service;

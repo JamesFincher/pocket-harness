@@ -398,7 +398,11 @@ fn run(command: &mut Command) -> Result<()> {
     if output.status.success() {
         Ok(())
     } else {
-        bail!("command failed with status {}: {:?}", output.status, command)
+        bail!(
+            "command failed with status {}: {:?}",
+            output.status,
+            command
+        )
     }
 }
 
@@ -410,12 +414,22 @@ fn run_redacted(command: &mut Command) -> Result<()> {
     let output = command
         .output()
         .with_context(|| format!("run {:?}", command))?;
-    print!("{}", redact_secrets(&String::from_utf8_lossy(&output.stdout)));
-    eprint!("{}", redact_secrets(&String::from_utf8_lossy(&output.stderr)));
+    print!(
+        "{}",
+        redact_secrets(&String::from_utf8_lossy(&output.stdout))
+    );
+    eprint!(
+        "{}",
+        redact_secrets(&String::from_utf8_lossy(&output.stderr))
+    );
     if output.status.success() {
         Ok(())
     } else {
-        bail!("command failed with status {}: {:?}", output.status, command)
+        bail!(
+            "command failed with status {}: {:?}",
+            output.status,
+            command
+        )
     }
 }
 
