@@ -74,6 +74,10 @@ log() {
   printf '%s\n' "$*" | tee -a "$INSTALL_LOG"
 }
 
+say() {
+  printf '%s\n' "$*" >&2
+}
+
 run() {
   log "+ $*"
   if [[ "$DRY_RUN" != "1" ]]; then
@@ -124,7 +128,11 @@ confirm() {
     log "non-interactive mode cannot confirm: $prompt"
     return 1
   fi
-  read -r -p "$prompt [y/N] " answer
+  if [[ -r /dev/tty ]]; then
+    read -r -p "$prompt [y/N] " answer </dev/tty
+  else
+    read -r -p "$prompt [y/N] " answer
+  fi
   [[ "$answer" == "y" || "$answer" == "Y" || "$answer" == "yes" || "$answer" == "YES" ]]
 }
 
@@ -141,10 +149,18 @@ prompt() {
     label="$label [$default]"
   fi
   if [[ "$secret" == "1" ]]; then
-    read -r -s -p "$label: " answer
+    if [[ -r /dev/tty ]]; then
+      read -r -s -p "$label: " answer </dev/tty
+    else
+      read -r -s -p "$label: " answer
+    fi
     printf '\n' >&2
   else
-    read -r -p "$label: " answer
+    if [[ -r /dev/tty ]]; then
+      read -r -p "$label: " answer </dev/tty
+    else
+      read -r -p "$label: " answer
+    fi
   fi
   printf '%s' "${answer:-$default}"
 }
@@ -241,6 +257,7 @@ catalog_field() {
 choose_from_lines() {
   local title="$1"
   local lines="$2"
+  local default_choice="${3:-1}"
   local filter choice filtered
   while true; do
     filter="$(prompt "$title search (blank lists all)" "")"
@@ -250,11 +267,11 @@ choose_from_lines() {
       filtered="$lines"
     fi
     if [[ -z "$filtered" ]]; then
-      log "No matches."
+      say "No matches."
       continue
     fi
-    printf '%s\n' "$filtered" | nl -w1 -s') '
-    choice="$(prompt "Choose number or exact id" "1")"
+    printf '%s\n' "$filtered" | nl -w1 -s') ' >&2
+    choice="$(prompt "Choose number or exact id" "$default_choice")"
     if [[ "$choice" =~ ^[0-9]+$ ]]; then
       printf '%s\n' "$filtered" | sed -n "${choice}p" | awk '{print $1}'
       return
@@ -263,8 +280,25 @@ choose_from_lines() {
       printf '%s' "$choice"
       return
     fi
-    log "Invalid choice."
+    say "Invalid choice."
   done
+}
+
+provider_with_available_token() {
+  local lines="$1"
+  local provider token_env provider_token
+  while IFS= read -r provider; do
+    [[ -z "$provider" ]] && continue
+    token_env="$(catalog_field "$provider" token_env)"
+    [[ -z "$token_env" ]] && continue
+    provider_token="${!token_env:-}"
+    if [[ -n "$provider_token" ]]; then
+      printf '%s' "$provider"
+      return
+    fi
+  done <<EOF
+$lines
+EOF
 }
 
 ensure_config() {
@@ -283,7 +317,7 @@ ensure_config() {
 
 onboard() {
   local bin="$1"
-  local telegram_token provider_lines provider model_lines model token_env provider_token base_url
+  local telegram_token provider_lines provider model_lines model token_env provider_token base_url preferred_provider default_model
 
   telegram_token="${TELEGRAM_BOT_TOKEN:-}"
   if [[ -z "$telegram_token" ]]; then
@@ -304,11 +338,13 @@ onboard() {
   fi
 
   provider_lines="$("$bin" --config "$CONFIG_PATH" --env-file "$ENV_FILE" providers | awk '{print $1}')"
-  provider="$(choose_from_lines "Provider" "$provider_lines")"
+  preferred_provider="$(provider_with_available_token "$provider_lines")"
+  provider="$(choose_from_lines "Provider" "$provider_lines" "${preferred_provider:-1}")"
   base_url="$(catalog_field "$provider" base_url)"
   token_env="$(catalog_field "$provider" token_env)"
+  default_model="$(catalog_field "$provider" default_model)"
   model_lines="$("$bin" --config "$CONFIG_PATH" --env-file "$ENV_FILE" models "$provider" | awk '/^- / {print substr($2,1)}')"
-  model="$(choose_from_lines "Model" "$model_lines")"
+  model="$(choose_from_lines "Model" "$model_lines" "${default_model:-1}")"
 
   provider_token="${!token_env:-}"
   if [[ -z "$provider_token" ]]; then
