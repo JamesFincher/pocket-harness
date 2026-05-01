@@ -396,4 +396,8 @@ main() {
   fi
 }
 
-main "${ORIGINAL_ARGS[@]}"
+if [[ ${#ORIGINAL_ARGS[@]} -gt 0 ]]; then
+  main "${ORIGINAL_ARGS[@]}"
+else
+  main
+fi
