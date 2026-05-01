@@ -9,12 +9,14 @@ use serde::{Deserialize, Serialize};
 use crate::config::{AppConfig, TelegramConfig, expand_string};
 use crate::config_store::ConfigStore;
 use crate::connector::ConnectorManager;
+use crate::local_tools::{LocalToolCall, LocalToolState, try_parse_natural};
 use crate::provider_catalog::{ProviderCatalog, format_models, format_providers};
 use crate::yaml_edit::{set_value, set_values};
 
 pub fn run_gateway(store: ConfigStore) -> Result<()> {
     let client = Client::new();
     let mut offset = None;
+    let mut local_tools = LocalToolState::default();
 
     loop {
         let active = store.load_with_recovery()?;
@@ -73,7 +75,13 @@ pub fn run_gateway(store: ConfigStore) -> Result<()> {
                 .or_else(|_| ProviderCatalog::bundled());
 
             let response = match catalog {
-                Ok(catalog) => handle_text(store.config_path(), &active.config, &catalog, text),
+                Ok(catalog) => handle_text_with_state(
+                    store.config_path(),
+                    &active.config,
+                    &catalog,
+                    text,
+                    &mut local_tools,
+                ),
                 Err(error) => Err(error),
             };
 
@@ -97,13 +105,27 @@ pub fn handle_text(
     catalog: &ProviderCatalog,
     text: &str,
 ) -> Result<String> {
+    let mut local_tools = LocalToolState::default();
+    handle_text_with_state(config_path, config, catalog, text, &mut local_tools)
+}
+
+fn handle_text_with_state(
+    config_path: &Path,
+    config: &AppConfig,
+    catalog: &ProviderCatalog,
+    text: &str,
+    local_tools: &mut LocalToolState,
+) -> Result<String> {
     let trimmed = text.trim();
     if trimmed.is_empty() {
         return Ok(help_text());
     }
 
     if !trimmed.starts_with('/') {
-        return run_prompt(config, catalog, "main", trimmed);
+        if let Some(call) = try_parse_natural(trimmed) {
+            return local_tools.run_tool(config_path, config, "main", &call);
+        }
+        return run_prompt(config_path, config, catalog, "main", trimmed, local_tools);
     }
 
     let mut parts = trimmed.splitn(2, char::is_whitespace);
@@ -136,11 +158,24 @@ pub fn handle_text(
             ConnectorManager::new(config).check_all()?;
             Ok("All connectors healthy.".to_string())
         }
+        "/pwd" | "/cd" | "/ls" | "/find" | "/grep" | "/cat" | "/sh" | "/bg" | "/sudo"
+        | "/sudo-bg" => {
+            let Some(call) = parse_local_command(command.as_str(), args) else {
+                return Ok(format!("Unknown command `{command}`.\n\n{}", help_text()));
+            };
+            local_tools.run_tool(config_path, config, "main", &call)
+        }
+        "/term" => {
+            let Some(call) = parse_terminal_command(args) else {
+                return Ok("Usage: /term list|tail <id>|kill <id>".to_string());
+            };
+            local_tools.run_tool(config_path, config, "main", &call)
+        }
         "/run" => {
             if args.is_empty() {
                 Ok("Usage: /run <prompt>".to_string())
             } else {
-                run_prompt(config, catalog, "main", args)
+                run_prompt(config_path, config, catalog, "main", args, local_tools)
             }
         }
         _ => Ok(format!("Unknown command `{command}`.\n\n{}", help_text())),
@@ -247,14 +282,66 @@ fn set_ai_enabled(config_path: &Path, args: &str) -> Result<String> {
     Ok(format!("AI model routing is now {args}."))
 }
 
+fn parse_local_command(command: &str, args: &str) -> Option<LocalToolCall> {
+    let name = match command {
+        "/pwd" => "pwd",
+        "/cd" => "cd",
+        "/ls" => "ls",
+        "/find" => "find",
+        "/grep" => "grep",
+        "/cat" => "cat",
+        "/sh" => "sh",
+        "/bg" => "bg",
+        "/sudo" => "sudo",
+        "/sudo-bg" => "sudo_bg",
+        _ => return None,
+    };
+    let parsed_args = match name {
+        "pwd" => Vec::new(),
+        "sudo" | "sudo_bg" => vec![args.to_string()],
+        _ => args
+            .split_whitespace()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>(),
+    };
+    Some(LocalToolCall {
+        name: name.to_string(),
+        args: parsed_args,
+    })
+}
+
+fn parse_terminal_command(args: &str) -> Option<LocalToolCall> {
+    let mut parts = args.split_whitespace();
+    let subcommand = parts.next()?.to_ascii_lowercase();
+    let name = match subcommand.as_str() {
+        "list" | "ls" => "term_list",
+        "tail" | "log" => "term_tail",
+        "kill" | "stop" => "term_kill",
+        _ => return None,
+    };
+    Some(LocalToolCall {
+        name: name.to_string(),
+        args: parts.map(ToString::to_string).collect(),
+    })
+}
+
 fn run_prompt(
+    config_path: &Path,
     config: &AppConfig,
     catalog: &ProviderCatalog,
     thread: &str,
     prompt: &str,
+    local_tools: &mut LocalToolState,
 ) -> Result<String> {
     if config.llm_router.enabled {
-        return crate::llm_router::run_prompt(config, catalog, prompt);
+        return crate::llm_router::run_prompt(
+            config_path,
+            config,
+            catalog,
+            thread,
+            prompt,
+            local_tools,
+        );
     }
 
     let response = ConnectorManager::new(config).run(thread, prompt)?;
@@ -304,8 +391,20 @@ fn help_text() -> String {
         "/ai on|off",
         "/check",
         "/run <prompt>",
+        "/pwd",
+        "/cd <path>",
+        "/ls [path]",
+        "/find <pattern> [path]",
+        "/grep <pattern> [path]",
+        "/cat <path>",
+        "/sh <command>",
+        "/bg <command>",
+        "/term list|tail <id>|kill <id>",
+        "/sudo <password> -- <command>",
+        "/sudo-bg <password> -- <command>",
         "",
-        "Plain text messages run on the main thread.",
+        "Plain text messages run on the main thread. Directory/list/search/read requests use local parent tools. Explicit terminal commands can run foreground or background sessions.",
+        "Delete Telegram messages that contain API keys or sudo passwords.",
     ]
     .join("\n")
 }
@@ -459,7 +558,9 @@ mod tests {
     use crate::config_store::ConfigStore;
     use crate::provider_catalog::{ProviderCatalog, ensure_default_catalog};
 
-    use super::{handle_text, redact_token};
+    use crate::local_tools::LocalToolState;
+
+    use super::{handle_text, handle_text_with_state, redact_token};
 
     fn test_store(temp: &tempfile::TempDir) -> (ConfigStore, std::path::PathBuf) {
         let config_path = temp.path().join("pocket-harness.yaml");
@@ -544,6 +645,70 @@ mod tests {
 
         assert!(message.contains("llm_router.api_key is empty"));
         assert!(!message.contains("echo thread="));
+    }
+
+    #[test]
+    fn telegram_local_tools_update_cwd_and_keep_terminal_state() {
+        let temp = tempfile::tempdir().unwrap();
+        let (store, config_path) = test_store(&temp);
+        let active = store.load_with_recovery().unwrap();
+        ensure_default_catalog(&config_path, &active.config, false).unwrap();
+        let catalog = ProviderCatalog::load_for_config(&config_path, &active.config).unwrap();
+        let project = temp.path().join("project");
+        fs::create_dir(&project).unwrap();
+        fs::write(project.join("marker.txt"), "hello").unwrap();
+        let mut local_tools = LocalToolState::default();
+
+        let reply = handle_text_with_state(
+            &config_path,
+            &active.config,
+            &catalog,
+            &format!("go to {}", project.display()),
+            &mut local_tools,
+        )
+        .unwrap();
+        assert!(reply.contains("cwd set to"));
+
+        let active = store.load_with_recovery().unwrap();
+        let listing = handle_text_with_state(
+            &config_path,
+            &active.config,
+            &catalog,
+            "/ls",
+            &mut local_tools,
+        )
+        .unwrap();
+        assert!(listing.contains("marker.txt"));
+
+        let started = handle_text_with_state(
+            &config_path,
+            &active.config,
+            &catalog,
+            "/bg printf ready; sleep 30",
+            &mut local_tools,
+        )
+        .unwrap();
+        assert!(started.contains("terminal t1"));
+
+        let listed = handle_text_with_state(
+            &config_path,
+            &active.config,
+            &catalog,
+            "/term list",
+            &mut local_tools,
+        )
+        .unwrap();
+        assert!(listed.contains("t1"));
+
+        let killed = handle_text_with_state(
+            &config_path,
+            &active.config,
+            &catalog,
+            "/term kill t1",
+            &mut local_tools,
+        )
+        .unwrap();
+        assert!(killed.contains("killed terminal t1"));
     }
 
     #[test]

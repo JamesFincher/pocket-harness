@@ -163,9 +163,17 @@ fn main() -> Result<()> {
             if active.config.llm_router.enabled {
                 let catalog =
                     ProviderCatalog::load_for_config(store.config_path(), &active.config)?;
+                let mut local_tools = pocket_harness::local_tools::LocalToolState::default();
                 println!(
                     "{}",
-                    pocket_harness::llm_router::run_prompt(&active.config, &catalog, &prompt)?
+                    pocket_harness::llm_router::run_prompt(
+                        store.config_path(),
+                        &active.config,
+                        &catalog,
+                        &thread,
+                        &prompt,
+                        &mut local_tools,
+                    )?
                 );
             } else {
                 let manager = ConnectorManager::new(&active.config);
