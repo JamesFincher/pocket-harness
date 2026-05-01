@@ -10,6 +10,30 @@ The first real target is Symphony, but the core is intentionally agent-agnostic:
 shell scripts, hosted agents, and custom internal systems should all fit behind the same connector
 boundary.
 
+## Install
+
+Install and onboard Pocket Harness from GitHub:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/JamesFincher/pocket-harness/main/install.sh | bash
+```
+
+Or from a local clone:
+
+```bash
+./install.sh
+```
+
+Install as a background Telegram service:
+
+```bash
+./install.sh --service
+```
+
+The installer detects prerequisites, installs Rust with `rustup` when needed, creates
+`~/.pocket-harness/config.yaml`, stores secrets in `~/.pocket-harness/env`, asks for Telegram and
+provider/model preferences, applies reliability defaults, and can install/start the service.
+
 ## Current Status
 
 This repo is an early scaffold with a working core:
@@ -36,6 +60,8 @@ local testing.
 
 ## Quick Start
 
+The installer is the recommended path. Manual development commands are:
+
 ```bash
 cargo run -- init --force
 cargo run -- check --health
@@ -55,8 +81,8 @@ pocket-harness --help
 Start Telegram after setting `TELEGRAM_BOT_TOKEN`:
 
 ```bash
-cargo run -- set mobile.telegram.enabled true
-cargo run -- telegram
+cargo run -- --env-file ~/.pocket-harness/env set mobile.telegram.enabled true
+cargo run -- --env-file ~/.pocket-harness/env telegram
 ```
 
 Run the hot-reload loop:
@@ -70,6 +96,20 @@ Update a setting in the YAML through the parent process:
 ```bash
 cargo run -- set threads.main.watch.enabled true
 cargo run -- check --health
+```
+
+Manage an installed service:
+
+```bash
+pocket-harness --config ~/.pocket-harness/config.yaml --env-file ~/.pocket-harness/env service status
+pocket-harness --config ~/.pocket-harness/config.yaml --env-file ~/.pocket-harness/env service restart
+```
+
+Reset installed state with confirmation:
+
+```bash
+pocket-harness --config ~/.pocket-harness/config.yaml --env-file ~/.pocket-harness/env reset logs
+pocket-harness --config ~/.pocket-harness/config.yaml --env-file ~/.pocket-harness/env reset all
 ```
 
 ## Architecture

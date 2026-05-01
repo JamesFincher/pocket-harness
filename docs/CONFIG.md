@@ -39,6 +39,21 @@ mobile:
 
 Unset variables expand to an empty string.
 
+Installed systems load secrets from `~/.pocket-harness/env` before validating YAML. The installer
+writes that file with `chmod 600` and configures YAML to reference variables instead of embedding
+raw tokens:
+
+```env
+TELEGRAM_BOT_TOKEN=123:telegram-token
+OPENAI_API_KEY=sk-...
+```
+
+Use a custom env file with:
+
+```bash
+pocket-harness --config ~/.pocket-harness/config.yaml --env-file /path/to/env check --health
+```
+
 ## Connectors
 
 ```yaml
@@ -105,3 +120,26 @@ The app keeps private reliability state under `gateway.data_dir`:
 
 This state is not a second user config file. It exists so bad edits do not take the mobile gateway
 down.
+
+## Service and Reset Commands
+
+The CLI owns service management for installed systems:
+
+```bash
+pocket-harness --config ~/.pocket-harness/config.yaml --env-file ~/.pocket-harness/env service install
+pocket-harness --config ~/.pocket-harness/config.yaml --env-file ~/.pocket-harness/env service status
+pocket-harness --config ~/.pocket-harness/config.yaml --env-file ~/.pocket-harness/env service restart
+```
+
+Supported service managers are user `systemd` on Linux, `launchd` on macOS, and Windows scheduled
+tasks when available.
+
+Reset commands require confirmation unless `--yes` is passed:
+
+```bash
+pocket-harness --config ~/.pocket-harness/config.yaml --env-file ~/.pocket-harness/env reset config
+pocket-harness --config ~/.pocket-harness/config.yaml --env-file ~/.pocket-harness/env reset service
+pocket-harness --config ~/.pocket-harness/config.yaml --env-file ~/.pocket-harness/env reset data
+pocket-harness --config ~/.pocket-harness/config.yaml --env-file ~/.pocket-harness/env reset logs
+pocket-harness --config ~/.pocket-harness/config.yaml --env-file ~/.pocket-harness/env reset all
+```

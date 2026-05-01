@@ -4,6 +4,17 @@ Telegram can act as both the mobile prompt surface and the setup/control plane.
 
 ## Local Start
 
+Recommended installer path:
+
+```bash
+./install.sh --service
+```
+
+The installer asks for the Telegram bot token, stores it in `~/.pocket-harness/env`, enables
+Telegram in YAML, and starts the service when requested.
+
+Manual setup:
+
 Create the config and provider catalog:
 
 ```bash
@@ -14,7 +25,7 @@ Set the Telegram bot token locally or through the environment:
 
 ```bash
 export TELEGRAM_BOT_TOKEN="123:telegram-token"
-pocket-harness --config pocket-harness.yaml set mobile.telegram.enabled true
+pocket-harness --config pocket-harness.yaml --env-file ~/.pocket-harness/env set mobile.telegram.enabled true
 ```
 
 Optional but recommended:
@@ -26,7 +37,7 @@ pocket-harness --config pocket-harness.yaml set mobile.telegram.allowed_users '[
 Start the gateway:
 
 ```bash
-pocket-harness --config pocket-harness.yaml telegram
+pocket-harness --config pocket-harness.yaml --env-file ~/.pocket-harness/env telegram
 ```
 
 ## In Telegram
@@ -50,6 +61,7 @@ Plain text messages are treated like `/run <message>` on the `main` thread.
 ## Notes
 
 - The Telegram bot token must be configured before the gateway can connect to Telegram.
+- Installed systems load the Telegram token from `~/.pocket-harness/env`.
 - Provider API tokens can be pasted through `/token` after the bot is running.
 - `/provider`, `/model`, `/token`, and `/ai` all update `pocket-harness.yaml` through the same
   validation path as the CLI.

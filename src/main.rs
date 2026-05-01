@@ -4,13 +4,16 @@ use std::thread;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 
 use pocket_harness::config_store::{ConfigSource, ConfigStore, digest_text};
 use pocket_harness::connector::ConnectorManager;
+use pocket_harness::env_file::{default_env_file, load_default_env_file};
 use pocket_harness::provider_catalog::{
     ProviderCatalog, ensure_default_catalog, format_models, format_providers,
 };
+use pocket_harness::reset::ResetTarget;
+use pocket_harness::service::ServiceOptions;
 
 #[derive(Debug, Parser)]
 #[command(name = "pocket-harness")]
@@ -19,6 +22,9 @@ use pocket_harness::provider_catalog::{
 struct Cli {
     #[arg(short, long, default_value = "pocket-harness.yaml")]
     config: PathBuf,
+
+    #[arg(long)]
+    env_file: Option<PathBuf>,
 
     #[command(subcommand)]
     command: Command,
@@ -60,10 +66,69 @@ enum Command {
     Providers,
     /// List models for a provider from providers.yaml.
     Models { provider: Option<String> },
+    /// Install, control, or inspect the background service.
+    Service {
+        #[command(subcommand)]
+        command: ServiceCommand,
+    },
+    /// Reset installed config, service files, runtime data, or logs.
+    Reset {
+        target: ResetCliTarget,
+        #[arg(long)]
+        yes: bool,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum ServiceCommand {
+    /// Install and start the Pocket Harness service.
+    Install {
+        #[arg(long)]
+        name: Option<String>,
+    },
+    /// Uninstall the Pocket Harness service.
+    Uninstall {
+        #[arg(long)]
+        name: Option<String>,
+    },
+    /// Start the service.
+    Start {
+        #[arg(long)]
+        name: Option<String>,
+    },
+    /// Stop the service.
+    Stop {
+        #[arg(long)]
+        name: Option<String>,
+    },
+    /// Restart the service.
+    Restart {
+        #[arg(long)]
+        name: Option<String>,
+    },
+    /// Print service manager status.
+    Status {
+        #[arg(long)]
+        name: Option<String>,
+    },
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum ResetCliTarget {
+    Config,
+    Service,
+    Data,
+    Logs,
+    All,
 }
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
+    let env_file = cli
+        .env_file
+        .or_else(|| std::env::var_os("POCKET_HARNESS_ENV_FILE").map(PathBuf::from))
+        .unwrap_or_else(default_env_file);
+    let _ = load_default_env_file(Some(&env_file))?;
     let store = ConfigStore::new(cli.config);
 
     match cli.command {
@@ -144,8 +209,104 @@ fn main() -> Result<()> {
             let provider = provider.unwrap_or(active.config.llm_router.provider);
             println!("{}", format_models(&catalog, &provider)?);
         }
+        Command::Service { command } => {
+            run_service_command(command, store.config_path().to_path_buf(), env_file)?;
+        }
+        Command::Reset { target, yes } => {
+            run_reset_command(target, yes, store.config_path().to_path_buf(), env_file)?;
+        }
     }
 
+    Ok(())
+}
+
+fn run_service_command(
+    command: ServiceCommand,
+    config_path: PathBuf,
+    env_file: PathBuf,
+) -> Result<()> {
+    match command {
+        ServiceCommand::Install { name } => {
+            let options = ServiceOptions::new(config_path, env_file, name);
+            let path = pocket_harness::service::install(&options)?;
+            println!("installed service definition {}", path.display());
+        }
+        ServiceCommand::Uninstall { name } => {
+            let options = ServiceOptions::new(config_path, env_file, name);
+            pocket_harness::service::uninstall(&options)?;
+            println!("uninstalled service");
+        }
+        ServiceCommand::Start { name } => {
+            let options = ServiceOptions::new(config_path, env_file, name);
+            pocket_harness::service::start(&options)?;
+        }
+        ServiceCommand::Stop { name } => {
+            let options = ServiceOptions::new(config_path, env_file, name);
+            pocket_harness::service::stop(&options)?;
+        }
+        ServiceCommand::Restart { name } => {
+            let options = ServiceOptions::new(config_path, env_file, name);
+            pocket_harness::service::restart(&options)?;
+        }
+        ServiceCommand::Status { name } => {
+            let options = ServiceOptions::new(config_path, env_file, name);
+            pocket_harness::service::status(&options)?;
+        }
+    }
+
+    Ok(())
+}
+
+fn run_reset_command(
+    target: ResetCliTarget,
+    yes: bool,
+    config_path: PathBuf,
+    env_file: PathBuf,
+) -> Result<()> {
+    let target = match target {
+        ResetCliTarget::Config => ResetTarget::Config,
+        ResetCliTarget::Service => ResetTarget::Service,
+        ResetCliTarget::Data => ResetTarget::Data,
+        ResetCliTarget::Logs => ResetTarget::Logs,
+        ResetCliTarget::All => ResetTarget::All,
+    };
+
+    pocket_harness::reset::confirm(target, yes)?;
+
+    let mut removed = Vec::new();
+    match target {
+        ResetTarget::Config => {
+            removed.extend(pocket_harness::reset::reset_config(
+                &config_path,
+                &env_file,
+            )?);
+        }
+        ResetTarget::Service => {
+            let options = ServiceOptions::new(config_path, env_file, None);
+            pocket_harness::service::uninstall(&options)?;
+        }
+        ResetTarget::Data => {
+            removed.extend(pocket_harness::reset::reset_data(&config_path)?);
+        }
+        ResetTarget::Logs => {
+            removed.extend(pocket_harness::reset::reset_logs(&config_path)?);
+        }
+        ResetTarget::All => {
+            let options = ServiceOptions::new(config_path.clone(), env_file.clone(), None);
+            let _ = pocket_harness::service::uninstall(&options);
+            removed.extend(pocket_harness::reset::reset_logs(&config_path)?);
+            removed.extend(pocket_harness::reset::reset_data(&config_path)?);
+            removed.extend(pocket_harness::reset::reset_config(
+                &config_path,
+                &env_file,
+            )?);
+        }
+    }
+
+    for path in removed {
+        println!("removed {}", path.display());
+    }
+    println!("reset complete");
     Ok(())
 }
 

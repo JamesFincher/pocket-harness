@@ -3,7 +3,8 @@
 Pocket Harness is a Rust crate with focused unit and integration tests. The
 current suite exercises config validation, connector capability negotiation,
 last-known-good recovery, connector execution, parent-owned job state, and YAML
-value parsing.
+value parsing. Installer changes should also cover shell syntax, service file
+rendering, env-file loading, and reset behavior.
 
 ## Test Commands
 
@@ -13,6 +14,15 @@ Run the full suite:
 cargo fmt --check
 cargo test
 cargo clippy --all-targets -- -D warnings
+```
+
+Check the installer without changing the system:
+
+```bash
+bash -n install.sh
+./install.sh --help
+POCKET_DRY_RUN=1 ./install.sh --standalone
+POCKET_DRY_RUN=1 ./install.sh --service
 ```
 
 Run one integration test file:
@@ -56,6 +66,16 @@ temporary config path. This avoids touching the developer's real
 - Covers parsing the bundled `providers.yaml` catalog and formatting provider
   model summaries with context and price data.
 
+`src/env_file.rs`
+
+- Covers loading env files before config validation while preserving existing
+  process environment values.
+
+`src/service.rs`
+
+- Covers generated service definitions for user `systemd`, macOS `launchd`, and
+  Windows scheduled-task launchers.
+
 `src/telegram.rs`
 
 - Covers Telegram setup commands that update provider/model/token settings in
@@ -83,6 +103,8 @@ temporary config path. This avoids touching the developer's real
 - Covers the compiled binary boundary for `init`, `check --health`, `run`,
   `set`, provider/model catalog listing, and the no-overwrite behavior of
   `init` without `--force`.
+- Covers installed env-file loading and reset command behavior at the CLI
+  boundary.
 - Uses a temporary `HOME` so CLI tests do not touch the developer's real
   `~/.pocket-harness` state.
 
@@ -216,3 +238,5 @@ As features are added, add tests near the behavior boundary:
   are added.
 - Reliability tests for timeout, retry, crash, malformed response, and partial
   write scenarios.
+- Installer tests for shell argument parsing, dry-run behavior, service manager
+  detection, and reset confirmations.
