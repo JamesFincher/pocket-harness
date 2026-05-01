@@ -13,6 +13,7 @@ RESET_SERVICE=0
 RESET_DATA=0
 YES=0
 DRY_RUN="${POCKET_DRY_RUN:-0}"
+ORIGINAL_ARGS=("$@")
 
 usage() {
   cat <<'USAGE'
@@ -82,6 +83,36 @@ run() {
 
 need() {
   command -v "$1" >/dev/null 2>&1
+}
+
+is_source_checkout() {
+  [[ -f Cargo.toml && -f providers.yaml && -f pocket-harness.yaml && -d src ]] || return 1
+  grep -q '^name = "pocket-harness"' Cargo.toml
+}
+
+ensure_source_checkout() {
+  is_source_checkout && return
+
+  local repo="JamesFincher/pocket-harness"
+  local repo_url="${POCKET_REPO_URL:-https://github.com/${repo}.git}"
+  local checkout_dir="${POCKET_SOURCE_DIR:-}"
+
+  if [[ -z "$checkout_dir" ]]; then
+    checkout_dir="$(mktemp -d)/pocket-harness"
+  fi
+
+  log "Installer is not running from a Pocket Harness source checkout."
+  log "Cloning source into: $checkout_dir"
+
+  if [[ "$DRY_RUN" == "1" ]]; then
+    log "Dry run complete. No source checkout was cloned."
+    exit 0
+  fi
+
+  run git clone --depth 1 "$repo_url" "$checkout_dir"
+
+  cd "$checkout_dir"
+  exec bash ./install.sh "$@"
 }
 
 confirm() {
@@ -324,6 +355,7 @@ main() {
   log "Logs:   $LOG_DIR"
 
   install_packages
+  ensure_source_checkout "$@"
   install_rust
 
   if [[ "$SKIP_BUILD" != "1" ]]; then
@@ -364,4 +396,4 @@ main() {
   fi
 }
 
-main "$@"
+main "${ORIGINAL_ARGS[@]}"
