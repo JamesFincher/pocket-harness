@@ -177,6 +177,35 @@ fn cli_loads_env_file_before_validating_config() {
 }
 
 #[test]
+fn cli_can_enable_network_features_before_secrets_are_ready() {
+    let temp = tempfile::tempdir().unwrap();
+    let home = temp.path().join("home");
+    let config_path = temp.path().join("pocket-harness.yaml");
+
+    assert!(
+        pocket_harness(&config_path, &home, &["init"])
+            .status
+            .success()
+    );
+
+    let telegram = pocket_harness(
+        &config_path,
+        &home,
+        &["set", "mobile.telegram.enabled", "true"],
+    );
+    assert!(telegram.status.success(), "stderr={}", stderr(&telegram));
+
+    let model = pocket_harness(&config_path, &home, &["set", "llm_router.model", "gpt-5.5"]);
+    assert!(model.status.success(), "stderr={}", stderr(&model));
+
+    let llm = pocket_harness(&config_path, &home, &["set", "llm_router.enabled", "true"]);
+    assert!(llm.status.success(), "stderr={}", stderr(&llm));
+
+    let check = pocket_harness(&config_path, &home, &["check"]);
+    assert!(check.status.success(), "stderr={}", stderr(&check));
+}
+
+#[test]
 fn cli_reset_config_removes_config_catalog_and_env_file() {
     let temp = tempfile::tempdir().unwrap();
     let home = temp.path().join("home");

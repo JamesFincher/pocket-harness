@@ -132,37 +132,29 @@ fn rejects_thread_watch_and_queue_when_globally_disabled() {
 }
 
 #[test]
-fn rejects_missing_telegram_and_llm_required_fields() {
+fn allows_missing_operational_tokens_so_parent_can_stay_up() {
     let mut missing_telegram_token = AppConfig::default();
     missing_telegram_token.mobile.telegram.enabled = true;
     missing_telegram_token.mobile.telegram.bot_token = "   ".to_string();
-    assert_config_error(&missing_telegram_token, |error| {
-        matches!(error, ConfigError::MissingTelegramToken)
-    });
+    missing_telegram_token.validate().unwrap();
 
     let mut missing_llm_provider = AppConfig::default();
     missing_llm_provider.llm_router.enabled = true;
     missing_llm_provider.llm_router.provider = "".to_string();
     missing_llm_provider.llm_router.model = "gpt-test".to_string();
-    assert_config_error(&missing_llm_provider, |error| {
-        matches!(error, ConfigError::MissingLlmProvider)
-    });
+    missing_llm_provider.validate().unwrap();
 
     let mut missing_llm_model = AppConfig::default();
     missing_llm_model.llm_router.enabled = true;
     missing_llm_model.llm_router.model = "   ".to_string();
-    assert_config_error(&missing_llm_model, |error| {
-        matches!(error, ConfigError::MissingLlmModel)
-    });
+    missing_llm_model.validate().unwrap();
 
     let mut missing_llm_api_key = AppConfig::default();
     missing_llm_api_key.llm_router.enabled = true;
     missing_llm_api_key.llm_router.provider = "openai".to_string();
     missing_llm_api_key.llm_router.model = "gpt-test".to_string();
     missing_llm_api_key.llm_router.api_key = "   ".to_string();
-    assert_config_error(&missing_llm_api_key, |error| {
-        matches!(error, ConfigError::MissingLlmApiKey)
-    });
+    missing_llm_api_key.validate().unwrap();
 }
 
 #[test]

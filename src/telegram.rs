@@ -1,3 +1,5 @@
+use std::io::{self, Write};
+use std::panic::{self, AssertUnwindSafe};
 use std::path::Path;
 use std::thread;
 use std::time::Duration;
@@ -7,34 +9,135 @@ use reqwest::blocking::Client;
 use serde::{Deserialize, Serialize};
 
 use crate::config::{AppConfig, TelegramConfig, expand_string};
-use crate::config_store::ConfigStore;
+use crate::config_store::{ConfigSource, ConfigStore};
 use crate::connector::ConnectorManager;
 use crate::local_tools::{LocalToolCall, LocalToolState, try_parse_natural};
 use crate::provider_catalog::{ProviderCatalog, format_models, format_providers};
+use crate::supervisor::{BackoffPolicy, BackoffSupervisor, FailureDecision};
 use crate::yaml_edit::{set_value, set_values};
 
 pub fn run_gateway(store: ConfigStore) -> Result<()> {
-    let client = Client::new();
+    let mut supervisor = BackoffSupervisor::new(BackoffPolicy::default());
+    log_gateway_info(&format!(
+        "event=telegram_gateway_start config_path={:?}",
+        store.config_path().display().to_string()
+    ));
+
+    let client = loop {
+        match Client::builder()
+            .connect_timeout(Duration::from_secs(10))
+            .build()
+        {
+            Ok(client) => break client,
+            Err(error) => {
+                let error = anyhow!(error);
+                let delay = supervisor.record_failure();
+                log_gateway_failure(
+                    GatewayFailureKind::HttpClient,
+                    "create Telegram HTTP client",
+                    delay,
+                    None,
+                    &error,
+                );
+                thread::sleep(delay.delay);
+            }
+        }
+    };
+    supervisor.record_success();
     let mut offset = None;
     let mut local_tools = LocalToolState::default();
+    let mut logged_polling_ready = false;
+    let mut logged_first_poll_success = false;
 
     loop {
-        let active = store.load_with_recovery()?;
+        let active = match store.load_with_recovery() {
+            Ok(active) => active,
+            Err(error) => {
+                logged_polling_ready = false;
+                logged_first_poll_success = false;
+                let delay = supervisor.record_failure();
+                log_gateway_failure(
+                    GatewayFailureKind::ConfigLoad,
+                    "load active config",
+                    delay,
+                    None,
+                    &error,
+                );
+                thread::sleep(delay.delay);
+                continue;
+            }
+        };
         let telegram = &active.config.mobile.telegram;
         if !telegram.enabled {
-            return Err(anyhow!("mobile.telegram.enabled is false"));
+            logged_polling_ready = false;
+            logged_first_poll_success = false;
+            let error = anyhow!("mobile.telegram.enabled is false");
+            let delay = supervisor.record_failure();
+            log_gateway_failure(
+                GatewayFailureKind::TelegramDisabled,
+                "check Telegram readiness",
+                delay,
+                None,
+                &error,
+            );
+            thread::sleep(delay.delay);
+            continue;
         }
 
         let token = expand_string(&telegram.bot_token);
         if token.trim().is_empty() {
-            return Err(anyhow!("mobile.telegram.bot_token is empty"));
+            logged_polling_ready = false;
+            logged_first_poll_success = false;
+            let error = anyhow!("mobile.telegram.bot_token is empty");
+            let delay = supervisor.record_failure();
+            log_gateway_failure(
+                GatewayFailureKind::MissingToken,
+                "check Telegram readiness",
+                delay,
+                None,
+                &error,
+            );
+            thread::sleep(delay.delay);
+            continue;
+        }
+
+        if !logged_polling_ready {
+            log_gateway_info(&format!(
+                "event=telegram_gateway_ready state=polling config_source={} data_dir={:?} poll_timeout_seconds={} token=configured",
+                config_source_name(&active.source),
+                active.state_dir.display().to_string(),
+                telegram.poll_timeout_seconds,
+            ));
+            logged_polling_ready = true;
         }
 
         let updates = match get_updates(&client, &token, offset, telegram.poll_timeout_seconds) {
-            Ok(updates) => updates,
+            Ok(updates) => {
+                supervisor.record_success();
+                if !logged_first_poll_success {
+                    log_gateway_info(&format!(
+                        "event=telegram_gateway_poll_success update_count={} next_offset={}",
+                        updates.len(),
+                        offset
+                            .map(|offset| offset.to_string())
+                            .unwrap_or_else(|| "none".to_string()),
+                    ));
+                    logged_first_poll_success = true;
+                }
+                updates
+            }
             Err(error) => {
-                log_telegram_error("poll Telegram updates", &token, &error);
-                thread::sleep(Duration::from_secs(5));
+                logged_polling_ready = false;
+                logged_first_poll_success = false;
+                let delay = supervisor.record_failure();
+                log_gateway_failure(
+                    GatewayFailureKind::TelegramPoll,
+                    "poll Telegram updates",
+                    delay,
+                    Some(&token),
+                    &error,
+                );
+                thread::sleep(delay.delay);
                 continue;
             }
         };
@@ -71,27 +174,27 @@ pub fn run_gateway(store: ConfigStore) -> Result<()> {
                 continue;
             }
 
-            let catalog = ProviderCatalog::load_for_config(store.config_path(), &active.config)
-                .or_else(|_| ProviderCatalog::bundled());
-
-            let response = match catalog {
-                Ok(catalog) => handle_text_with_state(
+            let reply = command_reply(|| {
+                let catalog = ProviderCatalog::load_for_config(store.config_path(), &active.config)
+                    .or_else(|_| ProviderCatalog::bundled())?;
+                handle_text_with_state(
                     store.config_path(),
                     &active.config,
                     &catalog,
                     text,
                     &mut local_tools,
-                ),
-                Err(error) => Err(error),
-            };
-
-            let reply = match response {
-                Ok(reply) => reply,
-                Err(error) => format!("Command failed: {error}"),
-            };
+                )
+            });
 
             if let Err(error) = send_message(&client, &token, message.chat.id, &reply) {
-                log_telegram_error("send Telegram reply", &token, &error);
+                let delay = supervisor.record_failure();
+                log_gateway_failure(
+                    GatewayFailureKind::TelegramSend,
+                    "send Telegram reply",
+                    delay,
+                    Some(&token),
+                    &error,
+                );
             }
         }
 
@@ -123,6 +226,9 @@ fn handle_text_with_state(
 
     if !trimmed.starts_with('/') {
         if let Some(call) = try_parse_natural(trimmed) {
+            if config.llm_router.enabled && should_route_tool_request_through_ai(trimmed, &call) {
+                return run_prompt(config_path, config, catalog, "main", trimmed, local_tools);
+            }
             return local_tools.run_tool(config_path, config, "main", &call);
         }
         return run_prompt(config_path, config, catalog, "main", trimmed, local_tools);
@@ -325,6 +431,17 @@ fn parse_terminal_command(args: &str) -> Option<LocalToolCall> {
     })
 }
 
+fn should_route_tool_request_through_ai(text: &str, call: &LocalToolCall) -> bool {
+    if matches!(call.name.as_str(), "sh" | "bg") {
+        return true;
+    }
+
+    let lower = text.to_ascii_lowercase();
+    ["tell me", "summarize", "explain", "why", "how", "what", "?"]
+        .iter()
+        .any(|marker| lower.contains(marker))
+}
+
 fn run_prompt(
     config_path: &Path,
     config: &AppConfig,
@@ -352,16 +469,50 @@ fn run_prompt(
     }
 }
 
+fn command_reply<F>(handler: F) -> String
+where
+    F: FnOnce() -> Result<String>,
+{
+    match panic::catch_unwind(AssertUnwindSafe(handler)) {
+        Ok(Ok(reply)) => reply,
+        Ok(Err(error)) => format!("Command failed: {error}"),
+        Err(payload) => {
+            let error = anyhow!("handler panic: {}", panic_payload(&payload));
+            log_gateway_error(
+                GatewayFailureKind::HandlerPanic,
+                "handle Telegram command",
+                None,
+                &error,
+            );
+            "Command failed: internal handler panic isolated; gateway is still running.".to_string()
+        }
+    }
+}
+
 fn status_text(config: &AppConfig) -> String {
     let token_state = if expand_string(&config.llm_router.api_key).trim().is_empty() {
         "missing"
     } else {
         "configured"
     };
+    let telegram_token_state = if expand_string(&config.mobile.telegram.bot_token)
+        .trim()
+        .is_empty()
+    {
+        "missing"
+    } else {
+        "configured"
+    };
 
     format!(
-        "Connector: {}\nAI routing: {}\nProvider: {}\nModel: {}\nBase URL: {}\nAPI key: {}",
+        "Connector: {}\nTelegram: {}\nTelegram token: {}\nAI routing: {}\nProvider: {}\nModel: {}\nBase URL: {}\nAPI key: {}",
         config.connectors.default,
+        if config.mobile.telegram.enabled {
+            "enabled"
+        } else {
+            "disabled"
+        },
+        telegram_token_state,
         if config.llm_router.enabled {
             "enabled"
         } else {
@@ -476,6 +627,7 @@ fn get_updates(
     timeout: u64,
 ) -> Result<Vec<TelegramUpdate>> {
     let url = telegram_url(token, "getUpdates");
+    let request_timeout = Duration::from_secs(timeout.saturating_add(10).clamp(15, 120));
     let response = client
         .post(url)
         .json(&GetUpdatesRequest {
@@ -483,6 +635,7 @@ fn get_updates(
             offset,
             allowed_updates: ["message"],
         })
+        .timeout(request_timeout)
         .send()?
         .error_for_status()?
         .json::<TelegramResponse<Vec<TelegramUpdate>>>()?;
@@ -509,6 +662,7 @@ fn send_message(client: &Client, token: &str, chat_id: i64, text: &str) -> Resul
             text: &truncated,
             disable_web_page_preview: true,
         })
+        .timeout(Duration::from_secs(15))
         .send()?
         .error_for_status()?
         .json::<TelegramResponse<serde_json::Value>>()?;
@@ -529,8 +683,92 @@ fn telegram_url(token: &str, method: &str) -> String {
     format!("https://api.telegram.org/bot{token}/{method}")
 }
 
-fn log_telegram_error(context: &str, token: &str, error: &anyhow::Error) {
-    eprintln!("{context}: {}", redact_token(&error.to_string(), token));
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum GatewayFailureKind {
+    HttpClient,
+    ConfigLoad,
+    TelegramDisabled,
+    MissingToken,
+    TelegramPoll,
+    TelegramSend,
+    HandlerPanic,
+}
+
+impl GatewayFailureKind {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::HttpClient => "http_client",
+            Self::ConfigLoad => "config_load",
+            Self::TelegramDisabled => "telegram_disabled",
+            Self::MissingToken => "missing_token",
+            Self::TelegramPoll => "telegram_poll",
+            Self::TelegramSend => "telegram_send",
+            Self::HandlerPanic => "handler_panic",
+        }
+    }
+}
+
+fn log_gateway_failure(
+    kind: GatewayFailureKind,
+    context: &str,
+    decision: FailureDecision,
+    token: Option<&str>,
+    error: &anyhow::Error,
+) {
+    let circuit_state = if decision.circuit_open {
+        "open"
+    } else {
+        "closed"
+    };
+    let message = token
+        .map(|token| redact_token(&error.to_string(), token))
+        .unwrap_or_else(|| error.to_string());
+    write_gateway_log(&format!(
+        "event=telegram_gateway_failure kind={} context={context:?} consecutive_failures={} retry_delay_ms={} circuit={circuit_state} error={message:?}",
+        kind.as_str(),
+        decision.consecutive_failures,
+        decision.delay.as_millis(),
+    ));
+}
+
+fn log_gateway_error(
+    kind: GatewayFailureKind,
+    context: &str,
+    token: Option<&str>,
+    error: &anyhow::Error,
+) {
+    let message = token
+        .map(|token| redact_token(&error.to_string(), token))
+        .unwrap_or_else(|| error.to_string());
+    write_gateway_log(&format!(
+        "event=telegram_gateway_error kind={} context={context:?} error={message:?}",
+        kind.as_str()
+    ));
+}
+
+fn log_gateway_info(line: &str) {
+    write_gateway_log(line);
+}
+
+fn write_gateway_log(line: &str) {
+    let mut stderr = io::stderr().lock();
+    let _ = writeln!(stderr, "{line}");
+    let _ = stderr.flush();
+}
+
+fn config_source_name(source: &ConfigSource) -> &'static str {
+    match source {
+        ConfigSource::Primary => "primary",
+        ConfigSource::LastKnownGood => "last-known-good",
+    }
+}
+
+fn panic_payload(payload: &(dyn std::any::Any + Send)) -> String {
+    payload
+        .downcast_ref::<&str>()
+        .map(|value| (*value).to_string())
+        .or_else(|| payload.downcast_ref::<String>().cloned())
+        .unwrap_or_else(|| "unknown panic payload".to_string())
 }
 
 fn redact_token(text: &str, token: &str) -> String {
@@ -560,7 +798,7 @@ mod tests {
 
     use crate::local_tools::LocalToolState;
 
-    use super::{handle_text, handle_text_with_state, redact_token};
+    use super::{command_reply, handle_text, handle_text_with_state, redact_token, status_text};
 
     fn test_store(temp: &tempfile::TempDir) -> (ConfigStore, std::path::PathBuf) {
         let config_path = temp.path().join("pocket-harness.yaml");
@@ -629,6 +867,32 @@ mod tests {
     }
 
     #[test]
+    fn telegram_status_reports_gateway_readiness_without_secrets() {
+        let mut config = AppConfig::default();
+        config.mobile.telegram.enabled = true;
+        config.mobile.telegram.bot_token = "".to_string();
+        config.llm_router.enabled = true;
+        config.llm_router.model = "gpt-5.5".to_string();
+        config.llm_router.api_key = "".to_string();
+
+        let status = status_text(&config);
+
+        assert!(status.contains("Telegram: enabled"));
+        assert!(status.contains("Telegram token: missing"));
+        assert!(status.contains("AI routing: enabled"));
+        assert!(status.contains("API key: missing"));
+    }
+
+    #[test]
+    fn telegram_command_panics_are_isolated_into_replies() {
+        let reply = command_reply(|| -> anyhow::Result<String> {
+            panic!("simulated handler panic");
+        });
+
+        assert!(reply.contains("internal handler panic isolated"));
+    }
+
+    #[test]
     fn telegram_plain_text_uses_llm_router_when_enabled() {
         let temp = tempfile::tempdir().unwrap();
         let (store, config_path) = test_store(&temp);
@@ -645,6 +909,29 @@ mod tests {
 
         assert!(message.contains("llm_router.api_key is empty"));
         assert!(!message.contains("echo thread="));
+    }
+
+    #[test]
+    fn telegram_natural_terminal_requests_route_through_ai_for_reflection() {
+        let temp = tempfile::tempdir().unwrap();
+        let (store, config_path) = test_store(&temp);
+        let mut active = store.load_with_recovery().unwrap();
+        active.config.llm_router.enabled = true;
+        active.config.llm_router.provider = "openai".to_string();
+        active.config.llm_router.model = "gpt-5.5".to_string();
+        active.config.llm_router.api_key = "".to_string();
+        ensure_default_catalog(&config_path, &active.config, false).unwrap();
+        let catalog = ProviderCatalog::load_for_config(&config_path, &active.config).unwrap();
+
+        let error = handle_text(
+            &config_path,
+            &active.config,
+            &catalog,
+            "run printf ok and tell me what it printed",
+        )
+        .unwrap_err();
+
+        assert!(error.to_string().contains("llm_router.api_key is empty"));
     }
 
     #[test]

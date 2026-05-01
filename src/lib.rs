@@ -9,5 +9,6 @@ pub mod local_tools;
 pub mod provider_catalog;
 pub mod reset;
 pub mod service;
+pub mod supervisor;
 pub mod telegram;
 pub mod yaml_edit;

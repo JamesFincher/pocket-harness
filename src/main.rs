@@ -14,6 +14,7 @@ use pocket_harness::provider_catalog::{
 };
 use pocket_harness::reset::ResetTarget;
 use pocket_harness::service::ServiceOptions;
+use pocket_harness::supervisor::{BackoffPolicy, BackoffSupervisor};
 
 #[derive(Debug, Parser)]
 #[command(name = "pocket-harness")]
@@ -128,7 +129,16 @@ fn main() -> Result<()> {
         .env_file
         .or_else(|| std::env::var_os("POCKET_HARNESS_ENV_FILE").map(PathBuf::from))
         .unwrap_or_else(default_env_file);
-    let _ = load_default_env_file(Some(&env_file))?;
+    if let Err(error) = load_default_env_file(Some(&env_file)) {
+        if should_continue_after_env_load_error(&cli.command) {
+            log_cli_warning(&format!(
+                "event=env_file_load_failure command=telegram path={:?} error={error:?}",
+                env_file.display().to_string(),
+            ));
+        } else {
+            return Err(error);
+        }
+    }
     let store = ConfigStore::new(cli.config);
 
     match cli.command {
@@ -331,8 +341,37 @@ fn validate_all_connectors(config: &pocket_harness::config::AppConfig) -> Result
     ConnectorManager::new(config).check_all()
 }
 
+fn should_continue_after_env_load_error(command: &Command) -> bool {
+    matches!(command, Command::Telegram)
+}
+
+fn log_cli_warning(line: &str) {
+    use std::io::Write;
+
+    let mut stderr = std::io::stderr().lock();
+    let _ = writeln!(stderr, "{line}");
+    let _ = stderr.flush();
+}
+
 fn watch_config(store: &ConfigStore, once: bool) -> Result<()> {
-    let mut active = store.stage_with_connector_check(validate_all_connectors)?;
+    let mut supervisor = BackoffSupervisor::new(BackoffPolicy::default());
+    let mut active = loop {
+        match store.stage_with_connector_check(validate_all_connectors) {
+            Ok(active) => break active,
+            Err(error) if once => return Err(error),
+            Err(error) => {
+                let delay = supervisor.record_failure();
+                let _ = store.write_rejection("watch_startup", &error);
+                println!(
+                    "event=watch_config_failure phase=startup consecutive_failures={} retry_delay_ms={} error={error}",
+                    delay.consecutive_failures,
+                    delay.delay.as_millis(),
+                );
+                thread::sleep(delay.delay);
+            }
+        }
+    };
+    supervisor.record_success();
     print_active("active", &active);
 
     if once {
@@ -352,8 +391,22 @@ fn watch_config(store: &ConfigStore, once: bool) -> Result<()> {
             continue;
         }
 
-        let text = fs::read_to_string(store.config_path())
-            .with_context(|| format!("read config {}", store.config_path().display()))?;
+        let text = match fs::read_to_string(store.config_path())
+            .with_context(|| format!("read config {}", store.config_path().display()))
+        {
+            Ok(text) => text,
+            Err(error) => {
+                let delay = supervisor.record_failure();
+                let _ = store.write_rejection("hot_reload_read", &error);
+                println!(
+                    "event=watch_config_failure phase=read consecutive_failures={} retry_delay_ms={} error={error}",
+                    delay.consecutive_failures,
+                    delay.delay.as_millis(),
+                );
+                thread::sleep(delay.delay);
+                continue;
+            }
+        };
         let digest = digest_text(&text);
 
         if digest == active.digest {
@@ -362,6 +415,7 @@ fn watch_config(store: &ConfigStore, once: bool) -> Result<()> {
 
         match store.stage_with_connector_check(validate_all_connectors) {
             Ok(next) => {
+                supervisor.record_success();
                 if next.source == ConfigSource::LastKnownGood {
                     println!(
                         "config changed but connector health failed; rolled back to last-known-good"
@@ -373,7 +427,13 @@ fn watch_config(store: &ConfigStore, once: bool) -> Result<()> {
             }
             Err(error) => {
                 let _ = store.write_rejection("hot_reload", &error);
-                println!("rejected config change: {error}");
+                let delay = supervisor.record_failure();
+                println!(
+                    "event=watch_config_failure phase=promote consecutive_failures={} retry_delay_ms={} error={error}",
+                    delay.consecutive_failures,
+                    delay.delay.as_millis(),
+                );
+                thread::sleep(delay.delay);
             }
         }
     }
@@ -400,5 +460,18 @@ fn print_capabilities(capabilities: &[String]) {
     println!("capabilities:");
     for capability in capabilities {
         println!("- {capability}");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Command, should_continue_after_env_load_error};
+
+    #[test]
+    fn telegram_keeps_running_after_env_file_load_error() {
+        assert!(should_continue_after_env_load_error(&Command::Telegram));
+        assert!(!should_continue_after_env_load_error(&Command::Check {
+            health: false
+        }));
     }
 }

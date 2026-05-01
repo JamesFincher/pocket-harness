@@ -111,26 +111,6 @@ impl AppConfig {
             }
         }
 
-        if self.mobile.telegram.enabled
-            && expand_string(&self.mobile.telegram.bot_token)
-                .trim()
-                .is_empty()
-        {
-            return Err(ConfigError::MissingTelegramToken);
-        }
-
-        if self.llm_router.enabled {
-            if self.llm_router.provider.trim().is_empty() {
-                return Err(ConfigError::MissingLlmProvider);
-            }
-            if self.llm_router.model.trim().is_empty() {
-                return Err(ConfigError::MissingLlmModel);
-            }
-            if expand_string(&self.llm_router.api_key).trim().is_empty() {
-                return Err(ConfigError::MissingLlmApiKey);
-            }
-        }
-
         Ok(())
     }
 

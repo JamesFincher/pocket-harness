@@ -1,4 +1,6 @@
+use std::panic::{self, AssertUnwindSafe};
 use std::path::Path;
+use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow, bail};
 use reqwest::blocking::Client;
@@ -9,6 +11,8 @@ use crate::config::{AppConfig, expand_string};
 use crate::local_tools::{LocalToolCall, LocalToolState, current_cwd, is_terminal_request};
 use crate::provider_catalog::{ProviderCatalog, ProviderDefinition};
 
+const LLM_REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
+
 pub fn run_prompt(
     config_path: &Path,
     config: &AppConfig,
@@ -17,7 +21,10 @@ pub fn run_prompt(
     prompt: &str,
     local_tools: &mut LocalToolState,
 ) -> Result<String> {
-    let client = Client::new();
+    let client = Client::builder()
+        .connect_timeout(Duration::from_secs(10))
+        .build()
+        .context("create LLM HTTP client")?;
     run_prompt_with_client(
         &client,
         config_path,
@@ -42,6 +49,13 @@ pub fn run_prompt_with_client(
         bail!("llm_router.enabled is false");
     }
 
+    if config.llm_router.provider.trim().is_empty() {
+        bail!("llm_router.provider is empty");
+    }
+    if config.llm_router.model.trim().is_empty() {
+        bail!("llm_router.model is empty");
+    }
+
     let provider = catalog.provider(&config.llm_router.provider)?;
     let model = model_id(config, catalog)?;
     let api_key = expand_string(&config.llm_router.api_key);
@@ -55,9 +69,11 @@ pub fn run_prompt_with_client(
             provider,
             &model,
             &api_key,
-            config_path,
-            config,
-            thread,
+            PromptRuntime {
+                config_path,
+                config,
+                thread,
+            },
             prompt,
             local_tools,
         ),
@@ -80,14 +96,19 @@ fn model_id(config: &AppConfig, catalog: &ProviderCatalog) -> Result<String> {
         .unwrap_or_else(|| selected.to_string()))
 }
 
+#[derive(Clone, Copy)]
+struct PromptRuntime<'a> {
+    config_path: &'a Path,
+    config: &'a AppConfig,
+    thread: &'a str,
+}
+
 fn run_google_gemini(
     client: &Client,
     provider: &ProviderDefinition,
     model: &str,
     api_key: &str,
-    config_path: &Path,
-    config: &AppConfig,
-    thread: &str,
+    runtime: PromptRuntime<'_>,
     prompt: &str,
     local_tools: &mut LocalToolState,
 ) -> Result<String> {
@@ -101,11 +122,12 @@ fn run_google_gemini(
         "role": "user",
         "parts": [{ "text": prompt }]
     })];
+    let mut seen_tool_calls = Vec::new();
 
-    for _ in 0..6 {
+    for _ in 0..8 {
         let body = json!({
             "systemInstruction": {
-                "parts": [{ "text": system_prompt(config, thread, terminal_allowed) }]
+                "parts": [{ "text": system_prompt(runtime.config, runtime.thread, terminal_allowed) }]
             },
             "contents": contents,
             "tools": [{ "functionDeclarations": local_tool_declarations(terminal_allowed) }]
@@ -125,9 +147,20 @@ fn run_google_gemini(
         let mut response_parts = Vec::new();
         for tool_call in calls {
             let name = tool_call.call.name.clone();
-            let result = local_tools
-                .run_tool(config_path, config, thread, &tool_call.call)
-                .unwrap_or_else(|error| format!("Tool failed: {error}"));
+            let signature = format!("{} {:?}", tool_call.call.name, tool_call.call.args);
+            let repeated = seen_tool_calls.contains(&signature);
+            seen_tool_calls.push(signature);
+            let result = if repeated {
+                "Repeated local tool call suppressed. Use the previous tool output to answer the user instead of calling this tool again.".to_string()
+            } else {
+                run_local_tool_isolated(
+                    runtime.config_path,
+                    runtime.config,
+                    runtime.thread,
+                    local_tools,
+                    &tool_call.call,
+                )
+            };
             let mut response = json!({
                 "functionResponse": {
                     "name": name,
@@ -143,9 +176,49 @@ fn run_google_gemini(
             "role": "user",
             "parts": response_parts
         }));
+
+        if seen_tool_calls.len() >= 2
+            && seen_tool_calls
+                .last()
+                .is_some_and(|last| seen_tool_calls[..seen_tool_calls.len() - 1].contains(last))
+        {
+            return finalize_google_gemini(
+                client,
+                &url,
+                api_key,
+                runtime,
+                terminal_allowed,
+                contents,
+            );
+        }
     }
 
-    bail!("Gemini requested too many local tool calls")
+    finalize_google_gemini(client, &url, api_key, runtime, terminal_allowed, contents)
+}
+
+fn finalize_google_gemini(
+    client: &Client,
+    url: &str,
+    api_key: &str,
+    runtime: PromptRuntime<'_>,
+    terminal_allowed: bool,
+    contents: Vec<Value>,
+) -> Result<String> {
+    let body = json!({
+        "systemInstruction": {
+            "parts": [{
+                "text": format!(
+                    "{}\nYou have reached the local tool-call limit. Do not call another tool. Use the tool outputs already present in the conversation to answer the user, or state exactly what is still missing.",
+                    system_prompt(runtime.config, runtime.thread, terminal_allowed)
+                )
+            }]
+        },
+        "contents": contents
+    });
+
+    let value = post_json(client, url, Some(("x-goog-api-key", api_key)), &body)
+        .context("call Google Gemini finalization")?;
+    extract_gemini_text(&value)
 }
 
 fn run_openai_compatible(
@@ -203,6 +276,7 @@ fn run_anthropic(
         .header("x-api-key", api_key)
         .header("anthropic-version", "2023-06-01")
         .json(&body)
+        .timeout(LLM_REQUEST_TIMEOUT)
         .send()
         .with_context(|| format!("post {url}"))?;
     response_json(value)
@@ -213,7 +287,7 @@ fn run_anthropic(
 fn system_prompt(config: &AppConfig, thread: &str, terminal_allowed: bool) -> String {
     let cwd = current_cwd(config, thread);
     let terminal_policy = if terminal_allowed {
-        "The user explicitly asked for terminal execution. You may use sh for short foreground commands or bg plus term_list/term_tail/term_kill for long-running background commands. Use terminal commands only for the requested task."
+        "The user explicitly asked for terminal execution. Use sh for quick foreground commands. Use bg plus term_list/term_tail/term_kill only for long-running commands or when the user asks for a background terminal. After a command returns useful output, answer the user instead of calling more tools. For Tailscale or tailnet address requests, prefer `tailscale ip -4`; if that command is unavailable or returns no address, report the exact failure briefly."
     } else {
         "Do not run terminal commands. For filesystem questions use pwd, cd, ls, find, grep, and cat."
     };
@@ -224,6 +298,7 @@ Current thread: {thread}\n\
 Current working directory: {}\n\
 Filesystem paths are real local folders and files, not rooms or places. If the user asks to go to, open, inspect, search, or read a path, use the local filesystem tools before answering.\n\
 The parent tools provide only operating-system basics. Connector-specific tools belong to the configured connector and are not automatically available here.\n\
+Treat every local tool response as a conversation turn. Reflect on the returned output and answer the user from it when enough information is available.\n\
 {terminal_policy}",
         cwd.display()
     )
@@ -405,6 +480,33 @@ fn local_call_from_function_args(
     })
 }
 
+fn run_local_tool_isolated(
+    config_path: &Path,
+    config: &AppConfig,
+    thread: &str,
+    local_tools: &mut LocalToolState,
+    call: &LocalToolCall,
+) -> String {
+    match panic::catch_unwind(AssertUnwindSafe(|| {
+        local_tools.run_tool(config_path, config, thread, call)
+    })) {
+        Ok(Ok(output)) => output,
+        Ok(Err(error)) => format!("Tool failed: {error}"),
+        Err(payload) => format!(
+            "Tool panicked and was isolated: {}",
+            panic_payload(&payload)
+        ),
+    }
+}
+
+fn panic_payload(payload: &(dyn std::any::Any + Send)) -> String {
+    payload
+        .downcast_ref::<&str>()
+        .map(|value| (*value).to_string())
+        .or_else(|| payload.downcast_ref::<String>().cloned())
+        .unwrap_or_else(|| "unknown panic payload".to_string())
+}
+
 fn post_json<T: Serialize + ?Sized>(
     client: &Client,
     url: &str,
@@ -415,7 +517,10 @@ fn post_json<T: Serialize + ?Sized>(
     if let Some((key, value)) = header {
         request = request.header(key, value);
     }
-    let response = request.send().with_context(|| format!("post {url}"))?;
+    let response = request
+        .timeout(LLM_REQUEST_TIMEOUT)
+        .send()
+        .with_context(|| format!("post {url}"))?;
     response_json(response)
 }
 
@@ -490,10 +595,18 @@ fn non_empty_text(text: String, provider: &str) -> Result<String> {
 
 #[cfg(test)]
 mod tests {
+    use std::path::Path;
+
+    use reqwest::blocking::Client;
     use serde_json::json;
+
+    use crate::config::AppConfig;
+    use crate::local_tools::LocalToolState;
+    use crate::provider_catalog::ProviderCatalog;
 
     use super::{
         extract_anthropic_text, extract_gemini_text, extract_openai_text, local_tool_declarations,
+        run_prompt_with_client,
     };
 
     #[test]
@@ -551,5 +664,58 @@ mod tests {
         assert!(names.contains(&"sh".to_string()));
         assert!(names.contains(&"bg".to_string()));
         assert!(names.contains(&"term_kill".to_string()));
+    }
+
+    #[test]
+    fn missing_llm_runtime_settings_fail_without_network_calls() {
+        let catalog = ProviderCatalog::bundled().unwrap();
+        let client = Client::new();
+        let mut local_tools = LocalToolState::default();
+        let mut config = AppConfig::default();
+        config.llm_router.enabled = true;
+        config.llm_router.api_key = "sk-test".to_string();
+
+        let missing_model = run_prompt_with_client(
+            &client,
+            Path::new("config.yaml"),
+            &config,
+            &catalog,
+            "main",
+            "hello",
+            &mut local_tools,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(missing_model.contains("llm_router.model is empty"));
+
+        config.llm_router.model = "gpt-5.5".to_string();
+        config.llm_router.provider = "".to_string();
+        let missing_provider = run_prompt_with_client(
+            &client,
+            Path::new("config.yaml"),
+            &config,
+            &catalog,
+            "main",
+            "hello",
+            &mut local_tools,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(missing_provider.contains("llm_router.provider is empty"));
+
+        config.llm_router.provider = "openai".to_string();
+        config.llm_router.api_key = "".to_string();
+        let missing_key = run_prompt_with_client(
+            &client,
+            Path::new("config.yaml"),
+            &config,
+            &catalog,
+            "main",
+            "hello",
+            &mut local_tools,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(missing_key.contains("llm_router.api_key is empty"));
     }
 }

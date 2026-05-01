@@ -285,46 +285,14 @@ pub fn render_windows_launcher(options: &ServiceOptions) -> String {
 }
 
 fn render_launchd_env_vars(env_file: &Path) -> String {
-    let mut lines = vec![
+    [
         "    <key>POCKET_HARNESS_ENV_FILE</key>".to_string(),
         format!(
             "    <string>{}</string>",
             xml_escape(&env_file.display().to_string())
         ),
-    ];
-
-    if let Ok(text) = fs::read_to_string(env_file) {
-        for line in text.lines() {
-            let line = line.trim();
-            if line.is_empty() || line.starts_with('#') {
-                continue;
-            }
-            if let Some((key, value)) = line.split_once('=') {
-                let key = key.trim();
-                if !key.is_empty() {
-                    lines.push(format!("    <key>{}</key>", xml_escape(key)));
-                    lines.push(format!(
-                        "    <string>{}</string>",
-                        xml_escape(strip_quotes(value.trim()))
-                    ));
-                }
-            }
-        }
-    }
-
-    lines.join("\n")
-}
-
-fn strip_quotes(value: &str) -> &str {
-    value
-        .strip_prefix('"')
-        .and_then(|value| value.strip_suffix('"'))
-        .or_else(|| {
-            value
-                .strip_prefix('\'')
-                .and_then(|value| value.strip_suffix('\''))
-        })
-        .unwrap_or(value)
+    ]
+    .join("\n")
 }
 
 fn systemd_unit_path(options: &ServiceOptions) -> PathBuf {
@@ -497,6 +465,8 @@ pub fn expand_service_path(raw: &str) -> PathBuf {
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
+
     use super::{
         ServiceOptions, redact_secrets, render_launchd_plist, render_systemd_unit,
         render_windows_launcher,
@@ -526,6 +496,27 @@ mod tests {
         assert!(plist.contains("<key>KeepAlive</key>"));
         assert!(plist.contains("/usr/local/bin/pocket-harness"));
         assert!(plist.contains("/tmp/pocket/config.yaml"));
+    }
+
+    #[test]
+    fn launchd_plist_points_to_env_file_without_embedding_secrets() {
+        let temp = tempfile::tempdir().unwrap();
+        let env_file = temp.path().join("env");
+        fs::write(
+            &env_file,
+            "TELEGRAM_BOT_TOKEN=telegram-secret\nGEMINI_API_KEY=gemini-secret\n",
+        )
+        .unwrap();
+        let mut options = options();
+        options.env_file = env_file.clone();
+        let plist = render_launchd_plist(&options);
+
+        assert!(plist.contains("<key>POCKET_HARNESS_ENV_FILE</key>"));
+        assert!(plist.contains(&env_file.display().to_string()));
+        assert!(!plist.contains("TELEGRAM_BOT_TOKEN"));
+        assert!(!plist.contains("GEMINI_API_KEY"));
+        assert!(!plist.contains("telegram-secret"));
+        assert!(!plist.contains("gemini-secret"));
     }
 
     #[test]

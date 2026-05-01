@@ -70,11 +70,15 @@ impl ConfigStore {
         match self.load_primary() {
             Ok(active) => {
                 let text = fs::read_to_string(&self.config_path)?;
-                self.promote(&active.config, &text)?;
+                if let Err(error) = self.promote(&active.config, &text) {
+                    log_config_store_error("promote_last_known_good", &error);
+                }
                 Ok(active)
             }
             Err(primary_error) => {
-                self.write_rejection("invalid_config", &primary_error)?;
+                if let Err(error) = self.write_rejection("invalid_config", &primary_error) {
+                    log_config_store_error("write_invalid_config_rejection", &error);
+                }
                 self.load_last_known_good()
                     .with_context(|| format!("primary config failed and no usable last-known-good exists: {primary_error}"))
             }
@@ -91,7 +95,9 @@ impl ConfigStore {
 
         match check_connectors(&config) {
             Ok(()) => {
-                self.promote(&config, &text)?;
+                if let Err(error) = self.promote(&config, &text) {
+                    log_config_store_error("promote_last_known_good", &error);
+                }
                 Ok(ActiveConfig {
                     state_dir: config.data_dir(&self.config_path),
                     config,
@@ -100,7 +106,9 @@ impl ConfigStore {
                 })
             }
             Err(connector_error) => {
-                self.write_rejection("connector_break", &connector_error)?;
+                if let Err(error) = self.write_rejection("connector_break", &connector_error) {
+                    log_config_store_error("write_connector_break_rejection", &error);
+                }
 
                 if config.recovery.enabled
                     && config.recovery.on_connector_break == RecoveryAction::RollbackToLastKnownGood
@@ -119,14 +127,36 @@ impl ConfigStore {
 
     pub fn promote(&self, config: &AppConfig, text: &str) -> Result<()> {
         let state_dir = config.data_dir(&self.config_path);
-        self.write_last_known_good_snapshot(config, text, &state_dir)?;
-
         let fallback_state_dir = default_state_dir(&self.config_path);
-        if fallback_state_dir != state_dir {
-            self.write_last_known_good_snapshot(config, text, &fallback_state_dir)?;
+
+        let mut attempts = 0;
+        let mut errors = Vec::new();
+
+        attempts += 1;
+        if let Err(error) = self.write_last_known_good_snapshot(config, text, &state_dir) {
+            errors.push(format!("{}: {error}", state_dir.display()));
         }
 
-        Ok(())
+        if fallback_state_dir != state_dir {
+            attempts += 1;
+            if let Err(error) =
+                self.write_last_known_good_snapshot(config, text, &fallback_state_dir)
+            {
+                errors.push(format!("{}: {error}", fallback_state_dir.display()));
+            }
+        }
+
+        if errors.len() == attempts {
+            Err(anyhow!(
+                "write last-known-good snapshots failed: {}",
+                errors.join("; ")
+            ))
+        } else {
+            for error in errors {
+                eprintln!("event=config_store_warning context=promote_snapshot error={error:?}");
+            }
+            Ok(())
+        }
     }
 
     fn write_last_known_good_snapshot(
@@ -151,10 +181,7 @@ impl ConfigStore {
     }
 
     pub fn load_last_known_good(&self) -> Result<ActiveConfig> {
-        let state_dir = self.best_state_dir();
-        let lkg_path = last_known_good_path(&state_dir);
-        let text = fs::read_to_string(&lkg_path)
-            .with_context(|| format!("read last-known-good {}", lkg_path.display()))?;
+        let (state_dir, text) = self.read_last_known_good_text()?;
         let config = parse_and_validate(&text)?;
 
         Ok(ActiveConfig {
@@ -166,10 +193,7 @@ impl ConfigStore {
     }
 
     pub fn restore_last_known_good_to_primary(&self) -> Result<()> {
-        let state_dir = self.best_state_dir();
-        let lkg_path = last_known_good_path(&state_dir);
-        let text = fs::read_to_string(&lkg_path)
-            .with_context(|| format!("read last-known-good {}", lkg_path.display()))?;
+        let (state_dir, text) = self.read_last_known_good_text()?;
 
         if self.config_path.exists() {
             let rejected_dir = state_dir.join("rejected-configs");
@@ -180,6 +204,24 @@ impl ConfigStore {
 
         atomic_write(&self.config_path, &text)?;
         Ok(())
+    }
+
+    fn read_last_known_good_text(&self) -> Result<(PathBuf, String)> {
+        let mut errors = Vec::new();
+        for state_dir in self.candidate_state_dirs() {
+            let lkg_path = last_known_good_path(&state_dir);
+            match fs::read_to_string(&lkg_path)
+                .with_context(|| format!("read last-known-good {}", lkg_path.display()))
+            {
+                Ok(text) => return Ok((state_dir, text)),
+                Err(error) => errors.push(error.to_string()),
+            }
+        }
+
+        Err(anyhow!(
+            "no usable last-known-good exists: {}",
+            errors.join("; ")
+        ))
     }
 
     pub fn write_rejection(&self, kind: &str, error: &anyhow::Error) -> Result<()> {
@@ -200,6 +242,15 @@ impl ConfigStore {
             Ok(active) => active.state_dir,
             Err(_) => default_state_dir(&self.config_path),
         }
+    }
+
+    fn candidate_state_dirs(&self) -> Vec<PathBuf> {
+        let mut dirs = vec![self.best_state_dir()];
+        let fallback = default_state_dir(&self.config_path);
+        if !dirs.contains(&fallback) {
+            dirs.push(fallback);
+        }
+        dirs
     }
 }
 
@@ -266,6 +317,10 @@ fn prune_history(history_dir: &Path, keep: usize) -> Result<()> {
     }
 
     Ok(())
+}
+
+fn log_config_store_error(context: &str, error: &anyhow::Error) {
+    eprintln!("event=config_store_error context={context} error={error}");
 }
 
 trait PrivateWrite {

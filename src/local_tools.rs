@@ -157,7 +157,7 @@ impl LocalToolState {
         }
         let id = format!("t{}", self.next_terminal_id);
         self.next_terminal_id += 1;
-        let cwd = current_cwd(config, thread);
+        let (cwd, cwd_warning) = executable_cwd(config, thread);
         let log_dir = terminal_log_dir(config_path, config);
         fs::create_dir_all(&log_dir).with_context(|| format!("create {}", log_dir.display()))?;
         let log_path = log_dir.join(format!("{id}.log"));
@@ -168,7 +168,7 @@ impl LocalToolState {
             .with_context(|| format!("open {}", log_path.display()))?;
         let stderr = stdout.try_clone().context("clone terminal log handle")?;
 
-        let child = if sudo_password.is_some() {
+        let child = if let Some(sudo_password) = sudo_password {
             let mut child = Command::new("sudo")
                 .arg("-S")
                 .arg("-p")
@@ -184,7 +184,7 @@ impl LocalToolState {
                 .with_context(|| format!("start sudo terminal in {}", cwd.display()))?;
             if let Some(stdin) = child.stdin.as_mut() {
                 use std::io::Write;
-                writeln!(stdin, "{}", sudo_password.unwrap()).context("send sudo password")?;
+                writeln!(stdin, "{sudo_password}").context("send sudo password")?;
             }
             child
         } else {
@@ -209,7 +209,10 @@ impl LocalToolState {
         });
 
         Ok(format!(
-            "started terminal {id} pid={pid}\ncwd={}\nlog={}",
+            "{}started terminal {id} pid={pid}\ncwd={}\nlog={}",
+            cwd_warning
+                .map(|warning| format!("{warning}\n"))
+                .unwrap_or_default(),
             cwd.display(),
             log_path.display()
         ))
@@ -410,8 +413,14 @@ pub fn try_parse_natural(text: &str) -> Option<LocalToolCall> {
 }
 
 pub fn is_terminal_request(text: &str) -> bool {
+    let lower = text.to_ascii_lowercase();
     matches!(try_parse_natural(text), Some(call) if call.name == "sh" || call.name == "bg")
-        || text.to_ascii_lowercase().contains(" in terminal")
+        || lower.contains("terminal")
+        || lower.contains("shell")
+        || lower.contains("command")
+        || lower.contains("tailnet")
+        || lower.contains("tail net")
+        || lower.contains("tailscale")
 }
 
 fn cd(config_path: &Path, config: &AppConfig, thread: &str, raw: &str) -> Result<String> {
@@ -552,7 +561,7 @@ fn sh(config: &AppConfig, thread: &str, command: &str) -> Result<String> {
     if command.trim().is_empty() {
         bail!("usage: /sh <command>");
     }
-    let cwd = current_cwd(config, thread);
+    let (cwd, cwd_warning) = executable_cwd(config, thread);
     let output = run_with_timeout(command, &cwd)?;
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -572,6 +581,9 @@ fn sh(config: &AppConfig, thread: &str, command: &str) -> Result<String> {
     if !output.status.success() {
         text = format!("command failed with status {}\n{}", output.status, text);
     }
+    if let Some(warning) = cwd_warning {
+        text = format!("{warning}\n{text}");
+    }
     Ok(cap_bytes(&text, MAX_OUTPUT_BYTES))
 }
 
@@ -579,7 +591,7 @@ fn sudo(config: &AppConfig, thread: &str, password: &str, command: &str) -> Resu
     if command.trim().is_empty() {
         bail!("usage: /sudo <password> -- <command>");
     }
-    let cwd = current_cwd(config, thread);
+    let (cwd, cwd_warning) = executable_cwd(config, thread);
     let mut child = Command::new("sudo")
         .arg("-S")
         .arg("-p")
@@ -607,6 +619,11 @@ fn sudo(config: &AppConfig, thread: &str, password: &str, command: &str) -> Resu
                 .filter(|part| !part.is_empty())
                 .collect::<Vec<_>>()
                 .join("\n");
+            let combined = if let Some(warning) = cwd_warning {
+                format!("{warning}\n{combined}")
+            } else {
+                combined
+            };
             if output.status.success() {
                 Ok(cap_bytes(&combined, MAX_OUTPUT_BYTES))
             } else {
@@ -673,6 +690,27 @@ fn resolve_path(config: &AppConfig, thread: &str, raw: &str) -> Result<PathBuf> 
 
 fn terminal_log_dir(config_path: &Path, config: &AppConfig) -> PathBuf {
     config.data_dir(config_path).join("logs").join("terminals")
+}
+
+fn executable_cwd(config: &AppConfig, thread: &str) -> (PathBuf, Option<String>) {
+    let configured = current_cwd(config, thread);
+    if configured.is_dir() {
+        return (configured, None);
+    }
+
+    let fallback = std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .filter(|path| path.is_dir())
+        .or_else(|| std::env::current_dir().ok())
+        .unwrap_or_else(|| PathBuf::from("."));
+    (
+        fallback.clone(),
+        Some(format!(
+            "configured cwd `{}` is not a directory; running from `{}`",
+            configured.display(),
+            fallback.display()
+        )),
+    )
 }
 
 fn parse_password_command(args: &[String]) -> Result<(String, String)> {
