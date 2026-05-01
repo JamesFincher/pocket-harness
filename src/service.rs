@@ -175,7 +175,7 @@ pub fn status(options: &ServiceOptions) -> Result<()> {
         Some(ServicePlatform::Launchd) => {
             let label = launchd_label(options);
             let domain = launchd_domain();
-            run(Command::new("launchctl").args(["print", &format!("{domain}/{label}")]))
+            run_redacted(Command::new("launchctl").args(["print", &format!("{domain}/{label}")]))
         }
         Some(ServicePlatform::WindowsTask) => {
             run(Command::new("schtasks").args(["/Query", "/TN", &options.service_name, "/V"]))
@@ -197,14 +197,16 @@ fn install_launchd(options: &ServiceOptions) -> Result<PathBuf> {
     atomic_write(&path, &render_launchd_plist(options))?;
     let domain = launchd_domain();
     let label = launchd_label(options);
+    let service_target = format!("{domain}/{label}");
+    run_allow_fail(Command::new("launchctl").args(["bootout", &service_target]));
     run_allow_fail(Command::new("launchctl").args([
         "bootout",
         &domain,
         path.to_string_lossy().as_ref(),
     ]));
     run(Command::new("launchctl").args(["bootstrap", &domain, path.to_string_lossy().as_ref()]))?;
-    run(Command::new("launchctl").args(["enable", &format!("{domain}/{label}")]))?;
-    run(Command::new("launchctl").args(["kickstart", "-k", &format!("{domain}/{label}")]))?;
+    run(Command::new("launchctl").args(["enable", &service_target]))?;
+    run(Command::new("launchctl").args(["kickstart", "-k", &service_target]))?;
     Ok(path)
 }
 
@@ -388,18 +390,57 @@ fn command_exists(command: &str) -> bool {
 }
 
 fn run(command: &mut Command) -> Result<()> {
-    let status = command
-        .status()
+    let output = command
+        .output()
         .with_context(|| format!("run {:?}", command))?;
-    if status.success() {
+    print!("{}", String::from_utf8_lossy(&output.stdout));
+    eprint!("{}", String::from_utf8_lossy(&output.stderr));
+    if output.status.success() {
         Ok(())
     } else {
-        bail!("command failed with status {status}: {:?}", command)
+        bail!("command failed with status {}: {:?}", output.status, command)
     }
 }
 
 fn run_allow_fail(command: &mut Command) {
-    let _ = command.status();
+    let _ = command.output();
+}
+
+fn run_redacted(command: &mut Command) -> Result<()> {
+    let output = command
+        .output()
+        .with_context(|| format!("run {:?}", command))?;
+    print!("{}", redact_secrets(&String::from_utf8_lossy(&output.stdout)));
+    eprint!("{}", redact_secrets(&String::from_utf8_lossy(&output.stderr)));
+    if output.status.success() {
+        Ok(())
+    } else {
+        bail!("command failed with status {}: {:?}", output.status, command)
+    }
+}
+
+fn redact_secrets(text: &str) -> String {
+    text.lines()
+        .map(|line| {
+            if let Some((left, _right)) = line.split_once("=>") {
+                let key = left.trim();
+                if is_secret_key(key) {
+                    return format!("{left}=> [redacted]");
+                }
+            }
+            line.to_string()
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+        + if text.ends_with('\n') { "\n" } else { "" }
+}
+
+fn is_secret_key(key: &str) -> bool {
+    let upper = key.to_ascii_uppercase();
+    upper.contains("TOKEN")
+        || upper.contains("API_KEY")
+        || upper.contains("SECRET")
+        || upper.contains("PASSWORD")
 }
 
 fn remove_file_if_exists(path: &Path) -> Result<()> {
@@ -443,7 +484,8 @@ pub fn expand_service_path(raw: &str) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::{
-        ServiceOptions, render_launchd_plist, render_systemd_unit, render_windows_launcher,
+        ServiceOptions, redact_secrets, render_launchd_plist, render_systemd_unit,
+        render_windows_launcher,
     };
 
     fn options() -> ServiceOptions {
@@ -477,5 +519,17 @@ mod tests {
         let script = render_windows_launcher(&options());
         assert!(script.contains("for /f"));
         assert!(script.contains("pocket-harness"));
+    }
+
+    #[test]
+    fn redacts_secret_values_from_service_status() {
+        let status = "environment = {\n\t\tGEMINI_API_KEY => abc123\n\t\tPATH => /bin\n\t\tTELEGRAM_BOT_TOKEN => token\n\t}\n";
+        let redacted = redact_secrets(status);
+
+        assert!(redacted.contains("GEMINI_API_KEY => [redacted]"));
+        assert!(redacted.contains("TELEGRAM_BOT_TOKEN => [redacted]"));
+        assert!(redacted.contains("PATH => /bin"));
+        assert!(!redacted.contains("abc123"));
+        assert!(!redacted.contains("token\n"));
     }
 }

@@ -85,6 +85,77 @@ run() {
   fi
 }
 
+mask_secret() {
+  local value="$1"
+  local length="${#value}"
+  if [[ "$length" -le 8 ]]; then
+    printf '%s' '***'
+  else
+    printf '%s...%s' "${value:0:4}" "${value: -4}"
+  fi
+}
+
+confirm_secret_warning() {
+  local warning="$1"
+  local value="$2"
+  log "$warning"
+  log "Received value: $(mask_secret "$value")"
+  if [[ "$NON_INTERACTIVE" == "1" ]]; then
+    log "non-interactive mode rejected the value."
+    return 1
+  fi
+  confirm "Use this value anyway?"
+}
+
+validate_telegram_token() {
+  local value="$1"
+  if [[ "$value" =~ ^[0-9]{6,}:[A-Za-z0-9_-]{30,}$ ]]; then
+    return 0
+  fi
+  confirm_secret_warning "Telegram token does not match the expected BotFather token shape." "$value"
+}
+
+validate_provider_token() {
+  local provider="$1"
+  local token_env="$2"
+  local value="$3"
+
+  [[ -z "$value" ]] && return 0
+  if [[ "$value" == *[[:space:]]* ]]; then
+    confirm_secret_warning "$token_env contains whitespace, which is unusual for an API key." "$value" || return 1
+  fi
+  if [[ "${#value}" -lt 16 ]]; then
+    confirm_secret_warning "$token_env is very short for an API key." "$value" || return 1
+  fi
+
+  case "$provider" in
+    openai)
+      [[ "$value" == sk-* ]] || confirm_secret_warning "OpenAI keys usually start with sk-." "$value"
+      ;;
+    anthropic)
+      [[ "$value" == sk-ant-* ]] || confirm_secret_warning "Anthropic keys usually start with sk-ant-." "$value"
+      ;;
+    google)
+      [[ "$value" == AIza* ]] || confirm_secret_warning "Gemini API keys usually start with AIza." "$value"
+      ;;
+    groq)
+      [[ "$value" == gsk_* ]] || confirm_secret_warning "Groq keys usually start with gsk_." "$value"
+      ;;
+    openrouter)
+      [[ "$value" == sk-or-* ]] || confirm_secret_warning "OpenRouter keys usually start with sk-or-." "$value"
+      ;;
+    xai)
+      [[ "$value" == xai-* ]] || confirm_secret_warning "xAI keys usually start with xai-." "$value"
+      ;;
+    deepseek)
+      [[ "$value" == sk-* ]] || confirm_secret_warning "DeepSeek keys usually start with sk-." "$value"
+      ;;
+    *)
+      return 0
+      ;;
+  esac
+}
+
 need() {
   command -v "$1" >/dev/null 2>&1
 }
@@ -301,6 +372,26 @@ $lines
 EOF
 }
 
+all_model_choices() {
+  local bin="$1"
+  local provider_lines="$2"
+  local provider
+  while IFS= read -r provider; do
+    [[ -z "$provider" ]] && continue
+    "$bin" --config "$CONFIG_PATH" --env-file "$ENV_FILE" models "$provider" \
+      | awk -v provider="$provider" '
+        /^- / {
+          line = substr($0, 3)
+          split(line, parts, " ")
+          detail = substr(line, length(parts[1]) + 2)
+          print provider "/" parts[1] " " detail
+        }
+      '
+  done <<EOF
+$provider_lines
+EOF
+}
+
 ensure_config() {
   local bin="$1"
   if [[ "$RESET_CONFIG" == "1" && -e "$CONFIG_PATH" ]]; then
@@ -317,7 +408,7 @@ ensure_config() {
 
 onboard() {
   local bin="$1"
-  local telegram_token provider_lines provider model_lines model token_env provider_token base_url preferred_provider default_model
+  local telegram_token provider_lines provider model_choices model_choice model token_env provider_token base_url preferred_provider default_model default_model_choice
 
   telegram_token="${TELEGRAM_BOT_TOKEN:-}"
   if [[ -z "$telegram_token" ]]; then
@@ -327,6 +418,10 @@ onboard() {
     log "Telegram token is required for the Telegram gateway."
     exit 1
   fi
+  validate_telegram_token "$telegram_token" || {
+    log "Telegram token was rejected."
+    exit 1
+  }
   write_env_value TELEGRAM_BOT_TOKEN "$telegram_token"
   run "$bin" --config "$CONFIG_PATH" --env-file "$ENV_FILE" set mobile.telegram.bot_token '$TELEGRAM_BOT_TOKEN'
   run "$bin" --config "$CONFIG_PATH" --env-file "$ENV_FILE" set mobile.telegram.enabled true
@@ -339,18 +434,30 @@ onboard() {
 
   provider_lines="$("$bin" --config "$CONFIG_PATH" --env-file "$ENV_FILE" providers | awk '{print $1}')"
   preferred_provider="$(provider_with_available_token "$provider_lines")"
-  provider="$(choose_from_lines "Provider" "$provider_lines" "${preferred_provider:-1}")"
+  if [[ -n "$preferred_provider" ]]; then
+    default_model="$(catalog_field "$preferred_provider" default_model)"
+    default_model_choice="$preferred_provider/$default_model"
+  else
+    default_model_choice="1"
+  fi
+
+  log "Available models:"
+  model_choices="$(all_model_choices "$bin" "$provider_lines")"
+  model_choice="$(choose_from_lines "Model" "$model_choices" "$default_model_choice")"
+  provider="${model_choice%%/*}"
+  model="${model_choice#*/}"
   base_url="$(catalog_field "$provider" base_url)"
   token_env="$(catalog_field "$provider" token_env)"
-  default_model="$(catalog_field "$provider" default_model)"
-  model_lines="$("$bin" --config "$CONFIG_PATH" --env-file "$ENV_FILE" models "$provider" | awk '/^- / {print substr($2,1)}')"
-  model="$(choose_from_lines "Model" "$model_lines" "${default_model:-1}")"
 
   provider_token="${!token_env:-}"
   if [[ -z "$provider_token" ]]; then
     provider_token="$(prompt "$token_env for $provider (blank skips LLM router)" "" 1)"
   fi
   if [[ -n "$provider_token" ]]; then
+    validate_provider_token "$provider" "$token_env" "$provider_token" || {
+      log "$token_env was rejected."
+      exit 1
+    }
     write_env_value "$token_env" "$provider_token"
     run "$bin" --config "$CONFIG_PATH" --env-file "$ENV_FILE" set llm_router.provider "$provider"
     run "$bin" --config "$CONFIG_PATH" --env-file "$ENV_FILE" set llm_router.base_url "$base_url"
@@ -379,9 +486,20 @@ install_service() {
     confirm "Reset existing Pocket Harness service?" || exit 1
     run "$bin" --config "$CONFIG_PATH" --env-file "$ENV_FILE" reset service --yes
   fi
-  run "$bin" --config "$CONFIG_PATH" --env-file "$ENV_FILE" service install
+  if ! run "$bin" --config "$CONFIG_PATH" --env-file "$ENV_FILE" service install; then
+    log "Service install failed. You can rerun just this step after fixing permissions with:"
+    log "$bin --config \"$CONFIG_PATH\" --env-file \"$ENV_FILE\" service install"
+    if [[ "$(uname -s)" == "Darwin" ]]; then
+      log "On macOS, install the LaunchAgent as your logged-in user, not with sudo."
+    elif need sudo; then
+      log "If the service manager reports a permission error, try:"
+      log "sudo $bin --config \"$CONFIG_PATH\" --env-file \"$ENV_FILE\" service install"
+    fi
+    exit 1
+  fi
   run "$bin" --config "$CONFIG_PATH" --env-file "$ENV_FILE" check --health
-  run "$bin" --config "$CONFIG_PATH" --env-file "$ENV_FILE" service status
+  log "Service install complete. Check status with:"
+  log "$bin --config \"$CONFIG_PATH\" --env-file \"$ENV_FILE\" service status"
 }
 
 main() {
