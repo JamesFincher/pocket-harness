@@ -2,7 +2,7 @@ use std::path::Path;
 use std::thread;
 use std::time::Duration;
 
-use anyhow::{Context, Result, anyhow};
+use anyhow::{Result, anyhow};
 use reqwest::blocking::Client;
 use serde::{Deserialize, Serialize};
 
@@ -28,8 +28,14 @@ pub fn run_gateway(store: ConfigStore) -> Result<()> {
             return Err(anyhow!("mobile.telegram.bot_token is empty"));
         }
 
-        let updates = get_updates(&client, &token, offset, telegram.poll_timeout_seconds)
-            .context("poll Telegram updates")?;
+        let updates = match get_updates(&client, &token, offset, telegram.poll_timeout_seconds) {
+            Ok(updates) => updates,
+            Err(error) => {
+                log_telegram_error("poll Telegram updates", &token, &error);
+                thread::sleep(Duration::from_secs(5));
+                continue;
+            }
+        };
 
         for update in updates {
             offset = Some(update.update_id + 1);
@@ -76,8 +82,9 @@ pub fn run_gateway(store: ConfigStore) -> Result<()> {
                 Err(error) => format!("Command failed: {error}"),
             };
 
-            send_message(&client, &token, message.chat.id, &reply)
-                .context("send Telegram reply")?;
+            if let Err(error) = send_message(&client, &token, message.chat.id, &reply) {
+                log_telegram_error("send Telegram reply", &token, &error);
+            }
         }
 
         thread::sleep(Duration::from_millis(250));
@@ -423,6 +430,18 @@ fn telegram_url(token: &str, method: &str) -> String {
     format!("https://api.telegram.org/bot{token}/{method}")
 }
 
+fn log_telegram_error(context: &str, token: &str, error: &anyhow::Error) {
+    eprintln!("{context}: {}", redact_token(&error.to_string(), token));
+}
+
+fn redact_token(text: &str, token: &str) -> String {
+    if token.is_empty() {
+        text.to_string()
+    } else {
+        text.replace(token, "[redacted]")
+    }
+}
+
 fn truncate_message(text: &str) -> String {
     const LIMIT: usize = 3900;
     if text.chars().count() <= LIMIT {
@@ -440,7 +459,7 @@ mod tests {
     use crate::config_store::ConfigStore;
     use crate::provider_catalog::{ProviderCatalog, ensure_default_catalog};
 
-    use super::handle_text;
+    use super::{handle_text, redact_token};
 
     fn test_store(temp: &tempfile::TempDir) -> (ConfigStore, std::path::PathBuf) {
         let config_path = temp.path().join("pocket-harness.yaml");
@@ -525,5 +544,16 @@ mod tests {
 
         assert!(message.contains("llm_router.api_key is empty"));
         assert!(!message.contains("echo thread="));
+    }
+
+    #[test]
+    fn redacts_telegram_token_from_error_text() {
+        let token = "123456789:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghi";
+        let text = format!("request failed for https://api.telegram.org/bot{token}/getUpdates");
+
+        assert_eq!(
+            redact_token(&text, token),
+            "request failed for https://api.telegram.org/bot[redacted]/getUpdates"
+        );
     }
 }
